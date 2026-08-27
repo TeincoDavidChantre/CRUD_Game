@@ -1,0 +1,27 @@
+# Dependencias de Node (evita subir carpetas gigantescas)
+node_modules/
+**/node_modules/
+
+# Archivos de variables de entorno (contraseñas, secretos JWT, URLs de BD)
+.env
+.env.local
+.env.*.local
+**/.env
+
+# Carpetas de compilación / producción
+dist/
+build/
+**/dist/
+**/build/
+
+# Archivos de registro y caché
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store
+
+# Caché de editores de código
+.vscode/
+.idea/
