@@ -7,43 +7,24 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id       String   @id @default(uuid())
-  username String   @unique
-  email    String   @unique
-  password String
-  reviews  Review[]
-  library  UserGame[]
+// Enum sirve para restringir los estados de avance a opciones fijas
+enum EstadoJuego {
+  PENDIENTE
+  JUGANDO
+  COMPLETADO
+  ABANDONADO
 }
 
-model Game {
-  id          String     @id @default(uuid())
-  title       String
-  description String
-  coverUrl    String
-  genre       String
-  reviews     Review[]
-  userGames   UserGame[]
-}
+// Modelo relacional para la tabla de la biblioteca de videojuegos
+model JuegoUsuario {
+  id            String      @id @default(uuid())
+  idUsuario     String      // ID del usuario propietario
+  tituloJuego   String      // Nombre del videojuego
+  urlPortada    String?     // URL de la imagen de portada (el ? significa opcional)
+  estado        EstadoJuego @default(PENDIENTE)
+  creadoEn      DateTime    @default(now())
+  actualizadoEn DateTime    @updatedAt
 
-model UserGame {
-  id        String   @id @default(uuid())
-  userId    String
-  gameId    String
-  status    String   // PENDIENTE, JUGANDO, COMPLETADO, ABANDONADO
-  user      User     @relation(fields: [userId], references: [id])
-  game      Game     @relation(fields: [gameId], references: [id])
-
-  @@unique([userId, gameId])
-}
-
-model Review {
-  id        String   @id @default(uuid())
-  rating    Int
-  comment   String
-  userId    String
-  gameId    String
-  user      User     @relation(fields: [userId], references: [id])
-  game      Game     @relation(fields: [gameId], references: [id])
-  createdAt DateTime @default(now())
+  // Restricción única: Un mismo usuario no puede registrar dos veces el mismo juego
+  @@unique([idUsuario, tituloJuego])
 }
