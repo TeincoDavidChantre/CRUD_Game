@@ -1,3 +1,4 @@
+// Configuraciones para conexión con PostgreSQL
 datasource db {
   provider = "postgresql"
 }
@@ -6,7 +7,17 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Aquí continúan tus modelos (ej. User, Game, etc.)
+// Modelo para la tabla de usuarios
+model Usuario {
+  id            String         @id @default(uuid())
+  nombre        String
+  email         String         @unique
+  password      String
+  creadoEn      DateTime       @default(now())
+  actualizadoEn DateTime       @updatedAt
+  juegos        JuegoUsuario[]
+}
+
 // Enum sirve para restringir los estados de avance a opciones fijas
 enum EstadoJuego {
   PENDIENTE
@@ -20,10 +31,13 @@ model JuegoUsuario {
   id            String      @id @default(uuid())
   idUsuario     String      // ID del usuario propietario
   tituloJuego   String      // Nombre del videojuego
-  urlPortada    String?     // URL de la imagen de portada (el ? significa opcional)
+  urlPortada    String?     // URL de la imagen de portada (opcional)
   estado        EstadoJuego @default(PENDIENTE)
   creadoEn      DateTime    @default(now())
   actualizadoEn DateTime    @updatedAt
+
+  // Relación con el modelo Usuario
+  usuario       Usuario     @relation(fields: [idUsuario], references: [id], onDelete: Cascade)
 
   // Restricción única: Un mismo usuario no puede registrar dos veces el mismo juego
   @@unique([idUsuario, tituloJuego])
