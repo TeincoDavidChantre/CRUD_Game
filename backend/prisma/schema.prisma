@@ -1,12 +1,12 @@
+datasource db {
+  provider = "postgresql"
+}
+
 generator client {
   provider = "prisma-client-js"
 }
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
+// Aquí continúan tus modelos (ej. User, Game, etc.)
 // Enum sirve para restringir los estados de avance a opciones fijas
 enum EstadoJuego {
   PENDIENTE
