@@ -1,7 +1,7 @@
 // Controlador con las operaciones CRUD basicas para enviar la peticion a al base de datos
 import { prisma } from '../lib/prisma.js';
 
-// Obtener todos los juegos de un usuario
+// 1. Obtener todos los juegos de un usuario (HU01.4)
 export const obtenerJuegos = async (req, res) => {
   const { idUsuario } = req.params;
   try {
@@ -15,7 +15,7 @@ export const obtenerJuegos = async (req, res) => {
   }
 };
 
-// Agregar un nuevo juego a la biblioteca
+// 2. Registrar un nuevo juego en la biblioteca (HU01.1)
 export const crearJuego = async (req, res) => {
   const { idUsuario, tituloJuego, urlPortada, estado } = req.body;
   try {
@@ -29,10 +29,38 @@ export const crearJuego = async (req, res) => {
     });
     res.status(201).json(nuevoJuego);
   } catch (error) {
-    // P2002 es el código de error de Prisma cuando se viola una restricción única
+    // P2002 indica violación de restricción única (juego duplicado)
     if (error.code === 'P2002') {
-      return res.status(400).json({ error: 'El juego ya se encuentra registrado en tu biblioteca' });
+      return res.status(400).json({ error: 'El juego ya se encuentra en tu biblioteca' });
     }
     res.status(500).json({ error: 'Error al registrar el juego' });
+  }
+};
+
+// 3. Cambiar el estado de avance de un juego (HU01.2)
+export const actualizarEstadoJuego = async (req, res) => {
+  const { id } = req.params;
+  const { estado } = req.body;
+  try {
+    const juegoActualizado = await prisma.juegoUsuario.update({
+      where: { id },
+      data: { estado },
+    });
+    res.json(juegoActualizado);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al actualizar el estado del juego' });
+  }
+};
+
+// 4. Eliminar un juego de la biblioteca (HU01.3)
+export const eliminarJuego = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await prisma.juegoUsuario.delete({
+      where: { id },
+    });
+    res.json({ message: 'Juego eliminado correctamente' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al eliminar el juego' });
   }
 };
