@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 // 1. Obtener todos los juegos de un usuario (HU01.4)
 export const obtenerJuegos = async (req, res) => {
   const { idUsuario } = req.params;
+
   try {
     const juegos = await prisma.juegoUsuario.findMany({
       where: { idUsuario },
@@ -11,6 +12,7 @@ export const obtenerJuegos = async (req, res) => {
     });
     res.json(juegos);
   } catch (error) {
+    console.error('Error en GET /api/juegos:', error); // Muestra el fallo exacto en la terminal
     res.status(500).json({ error: 'Error al obtener la lista de juegos' });
   }
 };

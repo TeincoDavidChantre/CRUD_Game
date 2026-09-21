@@ -1,4 +1,5 @@
 // Modulo que conecta la base de datos
+import 'dotenv/config'; // <--- Carga las variables de entorno
 import prismaPkg from '@prisma/client';
 import pg from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';

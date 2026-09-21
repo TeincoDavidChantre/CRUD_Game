@@ -1,4 +1,3 @@
-// Archivo de rutas para las peticiones a la base de datos  
 import { Router } from 'express';
 import { 
   obtenerJuegos, 
