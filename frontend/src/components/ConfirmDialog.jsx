@@ -12,22 +12,22 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/70"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
     >
-      <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-800 p-5 shadow-xl">
-        <h2 id="confirm-dialog-title" className="text-lg font-bold text-slate-100">
+      <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-800 p-5 shadow-xl">
+        <h2 id="confirm-dialog-title" className="text-lg font-bold text-zinc-100">
           {title}
         </h2>
-        <p className="mt-2 text-sm text-slate-400">{description}</p>
+        <p className="mt-2 text-sm text-zinc-400">{description}</p>
         <div className="mt-5 flex justify-end gap-3">
           <button
             type="button"
             disabled={busy}
             onClick={onCancel}
-            className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+            className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-700 disabled:opacity-50"
           >
             {cancelLabel}
           </button>

@@ -9,13 +9,18 @@ generator client {
 
 // Modelo para la tabla de usuarios
 model Usuario {
-  id            String         @id @default(uuid())
-  nombre        String
-  email         String         @unique
-  password      String
-  creadoEn      DateTime       @default(now())
-  actualizadoEn DateTime       @updatedAt
-  juegos        JuegoUsuario[]
+  id                   String         @id @default(uuid())
+  nombre               String
+  username             String         @unique
+  email                String         @unique
+  password             String
+  avatar               String?
+  biografia            String         @default("")
+  creadoEn             DateTime       @default(now())
+  actualizadoEn        DateTime       @updatedAt
+  juegos               JuegoUsuario[]
+  solicitudesEnviadas  Amistad[]      @relation("SolicitudesEnviadas")
+  solicitudesRecibidas Amistad[]      @relation("SolicitudesRecibidas")
 }
 
 // Enum sirve para restringir los estados de avance a opciones fijas
@@ -26,19 +31,70 @@ enum EstadoJuego {
   ABANDONADO
 }
 
+// Enum para estado de las relaciones de amistad
+enum EstadoAmistad {
+  PENDIENTE
+  ACEPTADA
+  RECHAZADA
+}
+
+// Modelo maestro para el catálogo centralizado de videojuegos
+model Juego {
+  id             String         @id @default(uuid())
+  externalId     String?        @unique
+  slug           String?
+  titulo         String
+  descripcion    String         @default("")
+  urlPortada     String?
+  plataformas    String         @default("")
+  sistemas       String         @default("")
+  generos        String         @default("")
+  metacritic     Int?
+  desarrollador  String         @default("")
+  anoLanzamiento Int?
+  enlacesTienda  String         @default("{}")
+  creadoEn       DateTime       @default(now())
+  actualizadoEn  DateTime       @updatedAt
+  usuarios       JuegoUsuario[]
+}
+
 // Modelo relacional para la tabla de la biblioteca de videojuegos
 model JuegoUsuario {
   id            String      @id @default(uuid())
-  idUsuario     String      // ID del usuario propietario
-  tituloJuego   String      // Nombre del videojuego
-  urlPortada    String?     // URL de la imagen de portada (opcional)
+  idUsuario     String
+  idJuego       String?
+  tituloJuego   String
+  urlPortada    String?
+  descripcion   String      @default("")
+  plataformas   String      @default("")
+  sistemas      String      @default("")
+  generos       String      @default("")
+  metacritic    Int?
+  desarrollador String      @default("")
+  etiquetas     String      @default("")
+  comentario    String      @default("")
+  calificacion  Int?
   estado        EstadoJuego @default(PENDIENTE)
   creadoEn      DateTime    @default(now())
   actualizadoEn DateTime    @updatedAt
 
-  // Relación con el modelo Usuario
   usuario       Usuario     @relation(fields: [idUsuario], references: [id], onDelete: Cascade)
+  juego         Juego?      @relation(fields: [idJuego], references: [id], onDelete: SetNull)
 
-  // Restricción única: Un mismo usuario no puede registrar dos veces el mismo juego
   @@unique([idUsuario, tituloJuego])
+}
+
+// Modelo relacional para sistema de amigos
+model Amistad {
+  id            String        @id @default(uuid())
+  idSolicitante String
+  idReceptor    String
+  estado        EstadoAmistad @default(PENDIENTE)
+  creadoEn      DateTime      @default(now())
+  actualizadoEn DateTime      @updatedAt
+
+  solicitante   Usuario       @relation("SolicitudesEnviadas", fields: [idSolicitante], references: [id], onDelete: Cascade)
+  receptor      Usuario       @relation("SolicitudesRecibidas", fields: [idReceptor], references: [id], onDelete: Cascade)
+
+  @@unique([idSolicitante, idReceptor])
 }
