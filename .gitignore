@@ -14,8 +14,20 @@ build/
 **/dist/
 **/build/
 
+# Herramientas locales embebidas (Node, Postgres de desarrollo)
+backend/.tools/
+**/.tools/
+
+# Cliente Prisma generado localmente
+backend/generated/
+**/generated/
+
+# Datos locales de Postgres embebido
+**/pgdata/
+
 # Archivos de registro y caché
 *.log
+*.log.err
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

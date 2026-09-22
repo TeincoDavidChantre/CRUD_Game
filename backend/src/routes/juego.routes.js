@@ -1,16 +1,17 @@
 import { Router } from 'express';
-import { 
-  obtenerJuegos, 
-  crearJuego, 
-  actualizarEstadoJuego, 
-  eliminarJuego 
+import {
+  obtenerJuegos,
+  crearJuego,
+  actualizarJuego,
+  eliminarJuego,
 } from '../controllers/juego.controller.js';
+import { requerirAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-router.get('/juegos/:idUsuario', obtenerJuegos);
-router.post('/juegos', crearJuego);
-router.patch('/juegos/:id', actualizarEstadoJuego);
-router.delete('/juegos/:id', eliminarJuego);
+router.get('/juegos', requerirAuth, obtenerJuegos);
+router.post('/juegos', requerirAuth, crearJuego);
+router.patch('/juegos/:id', requerirAuth, actualizarJuego);
+router.delete('/juegos/:id', requerirAuth, eliminarJuego);
 
 export default router;
