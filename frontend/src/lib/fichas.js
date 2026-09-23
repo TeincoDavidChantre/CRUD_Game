@@ -18,6 +18,150 @@ export function anioDe(valor) {
   return match ? match[0] : '';
 }
 
+/** Clave estable para deduplicar etiquetas de disponibilidad. */
+function claveDisponibilidad(etiqueta) {
+  const t = normalizar(etiqueta);
+  if (t === 'windows' || t === 'pc') return 'pc';
+  if (t === 'mac' || t === 'macos' || t === 'os x') return 'mac';
+  if (/switch\s*2|switch2/.test(t)) return 'switch2';
+  if (t === 'switch' || t.includes('nintendo switch')) return 'switch';
+  if (/^ps5$|playstation 5/.test(t)) return 'ps5';
+  if (/^ps4$|playstation 4/.test(t)) return 'ps4';
+  if (/^ps3$|playstation 3/.test(t)) return 'ps3';
+  if (/^ps2$|playstation 2/.test(t)) return 'ps2';
+  if (t.includes('vita')) return 'psvita';
+  if (t === 'psp') return 'psp';
+  if (t.includes('xbox series')) return 'xboxseries';
+  if (t.includes('xbox one')) return 'xboxone';
+  if (t.includes('xbox 360')) return 'xbox360';
+  if (t === 'xbox') return 'xbox';
+  if (t === 'playstation') return 'playstation';
+  if (t === 'nintendo') return 'nintendo';
+  if (t.includes('epic')) return 'epic';
+  if (t.includes('microsoft store')) return 'msstore';
+  if (t.includes('app store')) return 'appstore';
+  if (t === 'movil' || t === 'mobile') return 'movil';
+  return t;
+}
+
+/** Etiqueta legible para UI / iconos. */
+function etiquetaDisponibilidad(etiqueta) {
+  const t = normalizar(etiqueta);
+  if (t === 'windows' || t === 'pc') return 'PC';
+  if (t === 'mac' || t === 'macos' || t === 'os x') return 'Mac';
+  if (/switch\s*2|switch2/.test(t)) return 'Nintendo Switch 2';
+  if (t === 'switch' || t.includes('nintendo switch')) return 'Nintendo Switch';
+  if (/^ps5$|playstation 5/.test(t)) return 'PlayStation 5';
+  if (/^ps4$|playstation 4/.test(t)) return 'PlayStation 4';
+  if (/^ps3$|playstation 3/.test(t)) return 'PlayStation 3';
+  if (/^ps2$|playstation 2/.test(t)) return 'PlayStation 2';
+  if (t.includes('vita')) return 'PS Vita';
+  if (t.includes('epic')) return 'Epic Games';
+  if (t.includes('microsoft store')) return 'Microsoft Store';
+  if (t.includes('app store')) return 'App Store';
+  if (t === 'movil' || t === 'mobile') return 'Móvil';
+  if (t.includes('xbox series')) return 'Xbox Series X|S';
+  return String(etiqueta || '').trim();
+}
+
+/**
+ * Separa sin solapamiento:
+ * - tiendas/plataformas: Steam, Epic, Android, iOS, Nintendo, PlayStation, Xbox...
+ * - consolas: PC, Móvil, Switch, PS5, Wii, Xbox Series...
+ */
+export function clasificarDisponibilidad(item) {
+  const crudos = [
+    ...partir(item?.donde),
+    ...partir(item?.sistemas),
+    ...partir(item?.plataformas),
+  ];
+
+  let enlaces = item?.enlacesTienda;
+  if (typeof enlaces === 'string') {
+    try {
+      enlaces = JSON.parse(enlaces);
+    } catch {
+      enlaces = null;
+    }
+  }
+  if (enlaces && typeof enlaces === 'object') {
+    if (enlaces.steam) crudos.push('Steam');
+    if (enlaces.epic) crudos.push('Epic Games');
+    if (enlaces.gog) crudos.push('GOG');
+    if (enlaces.microsoft || enlaces.xbox) crudos.push('Microsoft Store');
+    if (enlaces.playstation) crudos.push('PlayStation');
+    if (enlaces.nintendo) crudos.push('Nintendo');
+    if (enlaces.appstore || enlaces.ios) crudos.push('App Store');
+  }
+
+  const tiendas = [];
+  const consolas = [];
+  const vistosTienda = new Set();
+  const vistosConsola = new Set();
+
+  function ponerTienda(etiqueta) {
+    const clave = claveDisponibilidad(etiqueta);
+    if (!clave || vistosTienda.has(clave) || vistosConsola.has(clave)) return;
+    vistosTienda.add(clave);
+    tiendas.push(etiquetaDisponibilidad(etiqueta));
+  }
+
+  function ponerConsola(etiqueta) {
+    const clave = claveDisponibilidad(etiqueta);
+    if (!clave || vistosConsola.has(clave) || vistosTienda.has(clave)) return;
+    vistosConsola.add(clave);
+    consolas.push(etiquetaDisponibilidad(etiqueta));
+  }
+
+  for (const raw of crudos) {
+    const t = normalizar(raw);
+    if (!t) continue;
+
+    // Marcas / tiendas digitales
+    if (
+      t === 'steam'
+      || t.includes('epic')
+      || t === 'gog'
+      || t.includes('microsoft store')
+      || t.includes('app store')
+      || t === 'android'
+      || t === 'ios'
+      || t === 'nintendo'
+      || t === 'playstation'
+      || t === 'xbox'
+    ) {
+      ponerTienda(raw);
+      continue;
+    }
+
+    // Consolas / dispositivos
+    if (
+      t === 'pc'
+      || t === 'windows'
+      || t === 'mac'
+      || t === 'macos'
+      || t === 'linux'
+      || t === 'movil'
+      || t === 'mobile'
+      || /^ps\d$/.test(t)
+      || t.includes('playstation')
+      || t.includes('vita')
+      || t === 'psp'
+      || t.includes('xbox')
+      || /switch|wii|3ds|\bds\b|gamecube|n64|snes|\bnes\b|game boy/.test(t)
+    ) {
+      ponerConsola(raw);
+    }
+  }
+
+  // Si hay Android/iOS como plataforma, la consola asociada es Móvil
+  if ((vistosTienda.has('android') || vistosTienda.has('ios') || vistosTienda.has('appstore')) && !vistosConsola.has('movil')) {
+    ponerConsola('Móvil');
+  }
+
+  return { tiendas, consolas };
+}
+
 export function desdeBiblioteca(juego) {
   return {
     libraryId: juego.id,
@@ -183,10 +327,18 @@ export function desdeCatalogo(item, propio) {
     desarrollador: item.desarrollador || base?.desarrollador || '',
     generos: partir(item.generos || base?.generos),
     metacritic: item.metacritic || base?.metacritic || null,
+    igdbRating: item.igdbRating ?? base?.igdbRating ?? null,
+    jugadores: item.jugadores || base?.jugadores || '',
+    requiereInternet: item.requiereInternet === true || base?.requiereInternet === true ? true : null,
+    logoUrl: item.logoUrl || base?.logoUrl || null,
+    hltbMain: item.hltbMain ?? base?.hltbMain ?? null,
+    hltbMainExtra: item.hltbMainExtra ?? base?.hltbMainExtra ?? null,
+    hltbCompletionist: item.hltbCompletionist ?? base?.hltbCompletionist ?? null,
     lanzamiento: item.lanzamiento || (item.anoLanzamiento ? `${item.anoLanzamiento}-01-01` : ''),
     etiqueta: item.etiqueta || '',
     ediciones: partir(item.ediciones || base?.ediciones),
     enlacesTienda: tiendas,
+    ofertaMeta: item.ofertaMeta || base?.ofertaMeta || null,
     estado: base?.estado || 'PENDIENTE',
     etiquetas: base?.etiquetas || '',
     comentario: base?.comentario || '',

@@ -40,22 +40,55 @@ enum EstadoAmistad {
 
 // Modelo maestro para el catálogo centralizado de videojuegos
 model Juego {
-  id             String         @id @default(uuid())
-  externalId     String?        @unique
-  slug           String?
-  titulo         String
-  descripcion    String         @default("")
-  urlPortada     String?
-  plataformas    String         @default("")
-  sistemas       String         @default("")
-  generos        String         @default("")
-  metacritic     Int?
-  desarrollador  String         @default("")
-  anoLanzamiento Int?
-  enlacesTienda  String         @default("{}")
-  creadoEn       DateTime       @default(now())
-  actualizadoEn  DateTime       @updatedAt
-  usuarios       JuegoUsuario[]
+  id                   String         @id @default(uuid())
+  externalId           String?        @unique
+  slug                 String?
+  titulo               String
+  descripcion          String         @default("")
+  urlPortada           String?
+  plataformas          String         @default("")
+  sistemas             String         @default("")
+  generos              String         @default("")
+  tematicas            String         @default("")
+  metacritic           Int?
+  igdbRating           Int?
+  jugadores            String?
+  requiereInternet     Boolean?
+  metaEnriquecida      Boolean        @default(false)
+  desarrollador        String         @default("")
+  editor               String         @default("")
+  anoLanzamiento       Int?
+  enlacesTienda        String         @default("{}")
+
+  // Santuario — identidad visual
+  logoUrl              String?
+  bannerUrl            String?
+
+  // Santuario — tiempos (HowLongToBeat)
+  hltbMain             Float?
+  hltbCompletionist    Float?
+
+  // Santuario — preservación
+  manualUrl            String?
+  archiveIdentifier    String?
+
+  // Santuario — crítica (OpenCritic)
+  openCriticScore      Int?
+  openCriticRecommend  Int?
+  openCriticTier       String?
+
+  // Santuario — multimedia
+  trailerYoutubeId     String?
+  screenshotsJson      String         @default("[]")
+  specsJson            String         @default("{}")
+
+  // Orquestación de enriquecimiento
+  santuarioEnriquecido Boolean        @default(false)
+  enriquecidoEn        DateTime?
+
+  creadoEn             DateTime       @default(now())
+  actualizadoEn        DateTime       @updatedAt
+  usuarios             JuegoUsuario[]
 }
 
 // Modelo relacional para la tabla de la biblioteca de videojuegos
@@ -69,10 +102,13 @@ model JuegoUsuario {
   plataformas   String      @default("")
   sistemas      String      @default("")
   generos       String      @default("")
+  tematicas     String      @default("")
   metacritic    Int?
   desarrollador String      @default("")
   etiquetas     String      @default("")
   comentario    String      @default("")
+  /// JSON: documentos de preservación añadidos por el usuario [{id,tipo,titulo,url}]
+  preservacionUsuarioJson String @default("[]")
   calificacion  Int?
   estado        EstadoJuego @default(PENDIENTE)
   creadoEn      DateTime    @default(now())

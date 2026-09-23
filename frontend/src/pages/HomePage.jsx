@@ -3,11 +3,141 @@ import { Link } from 'react-router-dom';
 import CoverTile, { CoverSkeleton } from '../components/CoverTile';
 import FichaDialog from '../components/FichaDialog';
 import GameSearch from '../components/GameSearch';
+import IconoPlataforma from '../components/IconoPlataforma';
 import PlatformIcon from '../components/PlatformIcon';
 import ApiKeysModal from '../components/ApiKeysModal';
 import { useToast } from '../components/Toast';
 import API from '../services/api';
-import { combinarCatalogo, desdeBiblioteca, desdeCatalogo, normalizar } from '../lib/fichas';
+import { combinarCatalogo, desdeBiblioteca, desdeCatalogo, normalizar, partir } from '../lib/fichas';
+import { useMonedaLocal } from '../lib/moneda';
+
+const POLL_OFERTAS_MS = 90_000;
+
+function badgeOferta(item) {
+  if (item?.gratis || item?.precio === 0 || item?.ahorroPct >= 100) return 'GRATIS';
+  if (item?.ahorroPct > 0) return `−${Math.round(item.ahorroPct)}%`;
+  return null;
+}
+
+function etiquetaTienda(item) {
+  return item?.tienda || item?.plataforma || item?.claveTienda || '';
+}
+
+/** Precio estilo tienda: ~~antes~~ actual (precio real de la tienda/región) */
+function PrecioOferta({ item, fmtOferta }) {
+  const monedaFuente = item?.moneda || 'USD';
+  if (item?.gratis || item?.precio === 0 || item?.ahorroPct >= 100) {
+    return (
+      <p className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+        {item.precioAntes != null && item.precioAntes > 0 ? (
+          <span className="text-zinc-500 line-through">{fmtOferta(item.precioAntes, monedaFuente)}</span>
+        ) : null}
+        <span className="font-bold text-emerald-400">Gratis</span>
+      </p>
+    );
+  }
+  if (item?.precio == null) return null;
+  const actual = fmtOferta(item.precio, monedaFuente);
+  const antes = item.precioAntes != null && item.precioAntes > item.precio
+    ? fmtOferta(item.precioAntes, monedaFuente)
+    : null;
+  return (
+    <p className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+      {antes ? <span className="text-zinc-500 line-through">{antes}</span> : null}
+      <span className="font-bold text-emerald-400">{actual}</span>
+    </p>
+  );
+}
+
+/** Convierte item de oferta → forma de catálogo (ficha), sin abrir la tienda. */
+function enlacesDesdeOferta(item) {
+  const steamAppId = item?.steamAppId ? String(item.steamAppId) : '';
+  const clave = String(item?.claveTienda || item?.tienda || '').toLowerCase();
+  const titulo = String(item?.titulo || '').trim();
+  let url = String(item?.url || '').trim();
+  // Nunca usar CheapShark como destino de los botones de tienda
+  if (/cheapshark\.com/i.test(url)) url = '';
+
+  const out = {};
+  if (steamAppId) {
+    out.steam = `https://store.steampowered.com/app/${steamAppId}`;
+  }
+
+  if (clave.includes('steam')) {
+    out.steam = out.steam
+      || (url && /steampowered\.com/i.test(url) ? url : '')
+      || (titulo ? `https://store.steampowered.com/search/?term=${encodeURIComponent(titulo)}` : '');
+  } else if (clave.includes('epic')) {
+    out.epic = (url && /epicgames\.com/i.test(url) ? url : '')
+      || (titulo ? `https://store.epicgames.com/es-ES/browse?q=${encodeURIComponent(titulo)}` : 'https://store.epicgames.com/free-games');
+  } else if (clave.includes('gog')) {
+    out.gog = (url && /gog\.com/i.test(url) ? url : '')
+      || (titulo ? `https://www.gog.com/en/games?query=${encodeURIComponent(titulo)}` : 'https://www.gog.com');
+  } else if (clave.includes('humble')) {
+    out.humble = (url && /humblebundle\.com/i.test(url) ? url : '')
+      || (titulo ? `https://www.humblebundle.com/store/search?search=${encodeURIComponent(titulo)}` : 'https://www.humblebundle.com/store');
+  } else if (url && !/cheapshark\.com/i.test(url)) {
+    out.oferta = url;
+  } else if (steamAppId) {
+    // ya tenemos steam
+  } else if (titulo) {
+    out.oferta = `https://store.steampowered.com/search/?term=${encodeURIComponent(titulo)}`;
+  }
+
+  // Limpiar vacíos
+  for (const k of Object.keys(out)) {
+    if (!out[k]) delete out[k];
+  }
+  return out;
+}
+
+function ofertaComoCatalogo(item) {
+  const steamAppId = item?.steamAppId ? String(item.steamAppId) : '';
+  const crudo = String(item?.id || '');
+  // epic:uuid / cs:… no son ids de detalle de catálogo → no usarlos aquí
+  let id = '';
+  if (steamAppId) id = `steam:${steamAppId}`;
+  else if (crudo.startsWith('steam:')) id = crudo;
+
+  const tiendaNombre = item?.tienda || (item?.claveTienda === 'epic' ? 'Epic Games' : '') || '';
+  return {
+    id,
+    titulo: item?.titulo || '',
+    portada: item?.portada || item?.portadas?.[0] || '',
+    portadas: item?.portadas || [],
+    portadaVertical: item?.portadaVertical !== false,
+    steamAppId: steamAppId || undefined,
+    donde: tiendaNombre ? [tiendaNombre] : [],
+    enlacesTienda: enlacesDesdeOferta(item),
+    ofertaMeta: {
+      precio: item?.precio ?? null,
+      precioAntes: item?.precioAntes ?? null,
+      ahorroPct: item?.ahorroPct ?? null,
+      gratis: Boolean(item?.gratis || item?.precio === 0 || item?.ahorroPct >= 100),
+      tienda: tiendaNombre,
+      url: item?.url || null,
+      moneda: item?.moneda || 'USD',
+    },
+  };
+}
+
+function TileOferta({ item, fmtOferta, conIconoPlataforma = false, onAbrir }) {
+  return (
+    <div className="w-36 shrink-0 snap-start sm:w-40">
+      <CoverTile
+        minimo
+        titulo={item.titulo}
+        portada={item.portada}
+        portadas={item.portadas}
+        badge={badgeOferta(item)}
+        plataformaIcono={conIconoPlataforma ? etiquetaTienda(item) : null}
+        onClick={() => onAbrir?.(item)}
+        ancho="w-full"
+      />
+      <PrecioOferta item={item} fmtOferta={fmtOferta} />
+    </div>
+  );
+}
 
 function errorMessage(error, fallback) {
   return error?.response?.data?.error || fallback;
@@ -17,8 +147,13 @@ function esCaratula(item) {
   const url = String(item?.portada || item?.urlPortada || '');
   if (!url) return false;
   if (item.portadaVertical === false) return false;
-  if (/rawg\.io|\/screenshots?\/|\/header\.jpg|capsule_\d+x\d+|gameplay/i.test(url)) return false;
-  if (/library_600x900|\/05_packshots\/|store-images\.s-microsoft|playstation\.(net|com)|mzstatic\.com|t_cover_big/i.test(url)) return true;
+  // Capturas reales — no bloquear media.rawg.io/media/games ni IGDB covers
+  if (/\/screenshots?\//i.test(url) || /rawg\.io\/media\/screenshots/i.test(url)) return false;
+  if (/\/header\.jpg|capsule_\d+x\d+/i.test(url)) return false;
+  if (/gameplay/i.test(url) && /(rawg\.io|steamstatic)/i.test(url)) return false;
+  if (/library_600x900|\/05_packshots\/|store-images\.s-microsoft|playstation\.(net|com)|mzstatic\.com|t_cover_big|media\.rawg\.io\/media\/(?:resize\/[^/]+\/)?games\//i.test(url)) {
+    return true;
+  }
   return Boolean(item.portadaVertical);
 }
 
@@ -47,7 +182,33 @@ function tomarSinRepetir(lista, usados, limite) {
 }
 
 function seedVisita() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const clave = 'gametracker_sugerencias_seed';
+    const existente = sessionStorage.getItem(clave);
+    if (existente) return existente;
+    const nuevo = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    sessionStorage.setItem(clave, nuevo);
+    return nuevo;
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+function aplicarSugerencias(data, setters) {
+  const {
+    setParecidos, setTendencias, setRecomendados, setFilas, setCasa,
+  } = setters;
+  setParecidos(data.paraTi || []);
+  setTendencias(data.tendencias || []);
+  setRecomendados([]);
+  setFilas((data.porFamilia || []).map((fila) => ({
+    marca: fila.nombre,
+    clave: fila.familia,
+    sugeridos: fila.sugeridos || [],
+  })));
+  setCasa(data.estudio
+    ? { nombre: data.estudio.nombre, juegos: [], sugeridos: data.estudio.sugeridos || [] }
+    : { nombre: '', juegos: [], sugeridos: [] });
 }
 
 export default function HomePage() {
@@ -62,7 +223,11 @@ export default function HomePage() {
   const [showBanner, setShowBanner] = useState(!localStorage.getItem('gametracker_keys_configured'));
   const [casa, setCasa] = useState({ nombre: '', juegos: [], sugeridos: [] });
   const [filas, setFilas] = useState([]);
-  const [explorando, setExplorando] = useState(false);
+  const [descuentos, setDescuentos] = useState([]);
+  const [gratis, setGratis] = useState([]); // lista plana
+  const [ofertasMeta, setOfertasMeta] = useState({ actualizadoEn: null, cargando: true });
+  const { moneda, fmtOferta, tieneTasa } = useMonedaLocal();
+  const [explorando, setExplorando] = useState(true);
   const [ficha, setFicha] = useState(null);
   const [opening, setOpening] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -70,58 +235,104 @@ export default function HomePage() {
 
   useEffect(() => {
     let active = true;
-    API.get('/juegos')
-      .then(({ data }) => {
-        if (active) setJuegos(data);
-      })
-      .catch((err) => {
-        if (active) setError(errorMessage(err, 'No se pudo cargar el inicio'));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    const seed = seedVisita();
+    const setters = {
+      setParecidos, setTendencias, setRecomendados, setFilas, setCasa,
+    };
 
-    API.get('/catalogo/recomendaciones')
-      .then(({ data }) => {
-        if (active) setAmigosJugando(data.amigosJugando || []);
-      })
-      .catch(() => {});
+    // Biblioteca + sugerencias + amigos en paralelo (sin cascada)
+    Promise.allSettled([
+      API.get('/juegos'),
+      API.get('/catalogo/sugerencias', { params: { seed } }),
+      API.get('/catalogo/recomendaciones'),
+    ]).then(([rJuegos, rSug, rRec]) => {
+      if (!active) return;
+      if (rJuegos.status === 'fulfilled') {
+        setJuegos(rJuegos.value.data);
+      } else {
+        setError(errorMessage(rJuegos.reason, 'No se pudo cargar el inicio'));
+      }
+      if (rSug.status === 'fulfilled') {
+        aplicarSugerencias(rSug.value.data, setters);
+      } else {
+        console.warn('Sugerencias:', rSug.reason?.message || rSug.reason);
+      }
+      if (rRec.status === 'fulfilled') {
+        setAmigosJugando(rRec.value.data.amigosJugando || []);
+      }
+    }).finally(() => {
+      if (active) {
+        setLoading(false);
+        setExplorando(false);
+      }
+    });
 
     return () => {
       active = false;
     };
   }, []);
 
+  // Ofertas + gratis: carga inicial, poll corto y al volver a la pestaña
   useEffect(() => {
-    if (loading) return undefined;
     let active = true;
-    setExplorando(true);
-    const seed = seedVisita();
-    API.get('/catalogo/sugerencias', { params: { seed } })
-      .then(({ data }) => {
+    let timer = null;
+
+    async function cargarOfertas({ silencioso = false } = {}) {
+      if (!silencioso) setOfertasMeta((m) => ({ ...m, cargando: true }));
+      try {
+        const { data } = await API.get('/catalogo/ofertas', { params: { moneda } });
         if (!active) return;
-        setParecidos(data.paraTi || []);
-        setTendencias(data.tendencias || []);
-        setRecomendados([]);
-        setFilas((data.porFamilia || []).map((fila) => ({
-          marca: fila.nombre,
-          clave: fila.familia,
-          sugeridos: fila.sugeridos || [],
-        })));
-        setCasa(data.estudio
-          ? { nombre: data.estudio.nombre, juegos: [], sugeridos: data.estudio.sugeridos || [] }
-          : { nombre: '', juegos: [], sugeridos: [] });
-      })
-      .catch((err) => {
-        if (active) console.warn('Sugerencias:', err.message);
-      })
-      .finally(() => {
-        if (active) setExplorando(false);
-      });
+        setDescuentos(Array.isArray(data.descuentos) ? data.descuentos : []);
+        // v3: gratis es lista plana; compat si llegara seccionado
+        const rawGratis = data.gratis;
+        let plano = [];
+        if (Array.isArray(rawGratis)) {
+          if (rawGratis[0]?.items) {
+            plano = rawGratis.flatMap((f) => (f.items || []).map((it) => ({
+              ...it,
+              tienda: it.tienda || f.plataforma,
+              claveTienda: it.claveTienda || f.clave,
+            })));
+          } else {
+            plano = rawGratis;
+          }
+        }
+        setGratis(plano);
+        setOfertasMeta({
+          actualizadoEn: data.actualizadoEn || new Date().toISOString(),
+          cargando: false,
+        });
+      } catch {
+        if (active) setOfertasMeta((m) => ({ ...m, cargando: false }));
+      }
+    }
+
+    function programar() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        cargarOfertas({ silencioso: true }).finally(() => {
+          if (active) programar();
+        });
+      }, POLL_OFERTAS_MS);
+    }
+
+    function onVisibilidad() {
+      if (document.visibilityState === 'visible') {
+        cargarOfertas({ silencioso: true });
+      }
+    }
+
+    cargarOfertas().finally(() => {
+      if (active) programar();
+    });
+    document.addEventListener('visibilitychange', onVisibilidad);
+
     return () => {
       active = false;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibilidad);
     };
-  }, [juegos, loading]);
+  }, [moneda]);
 
   function abrirBiblioteca(juego) {
     setFicha(desdeBiblioteca(juego));
@@ -136,7 +347,88 @@ export default function HomePage() {
       const { data } = await API.get(`/catalogo/juegos/${encodeURIComponent(item.id)}`);
       setFicha(desdeCatalogo(combinarCatalogo(item, data), propio));
     } catch {
-      setError('No se pudo cargar la ficha');
+      // Mantener ficha provisional (p. ej. oferta sin id de catálogo resoluble)
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  /** Click en oferta: abre ficha enriquecida; el enlace a tienda va dentro de la ficha. */
+  async function abrirOferta(item) {
+    const base = ofertaComoCatalogo(item);
+    const propio = juegos.find((juego) => normalizar(juego.tituloJuego) === normalizar(item.titulo));
+    setFicha(desdeCatalogo(base, propio));
+    setOpening(true);
+
+    try {
+      let hit = null;
+
+      // 1) Detalle por steam:appId si existe
+      if (base.id) {
+        try {
+          const { data } = await API.get(`/catalogo/juegos/${encodeURIComponent(base.id)}`);
+          hit = data;
+        } catch {
+          /* seguir a búsqueda */
+        }
+      }
+
+      // 2) Búsqueda por título (Epic free, GOG sin steamAppId, etc.)
+      if (!hit?.descripcion && item.titulo) {
+        try {
+          const { data } = await API.get('/catalogo/buscar', { params: { q: item.titulo } });
+          const lista = Array.isArray(data) ? data : (data?.resultados || data?.juegos || []);
+          const n = normalizar(item.titulo);
+          const cand = lista.find((j) => normalizar(j.titulo) === n)
+            || lista.find((j) => {
+              const t = normalizar(j.titulo);
+              return t.includes(n) || n.includes(t);
+            })
+            || null;
+          if (cand?.id) {
+            try {
+              const det = await API.get(`/catalogo/juegos/${encodeURIComponent(cand.id)}`);
+              hit = det.data || cand;
+            } catch {
+              hit = cand;
+            }
+          } else if (cand) {
+            hit = cand;
+          }
+        } catch {
+          /* ficha mínima */
+        }
+      }
+
+      if (hit) {
+        const mezclado = combinarCatalogo(
+          {
+            ...base,
+            ...hit,
+            portada: hit.portada || hit.urlPortada || base.portada,
+            enlacesTienda: {
+              ...(typeof hit.enlacesTienda === 'object' && hit.enlacesTienda ? hit.enlacesTienda : {}),
+              ...base.enlacesTienda,
+            },
+            donde: [...new Set([
+              ...partir(hit.donde || hit.plataformas),
+              ...partir(base.donde),
+            ])],
+            ofertaMeta: base.ofertaMeta,
+          },
+          hit,
+        );
+        setFicha(desdeCatalogo({
+          ...mezclado,
+          enlacesTienda: {
+            ...(mezclado.enlacesTienda || {}),
+            ...base.enlacesTienda,
+          },
+          ofertaMeta: base.ofertaMeta,
+        }, propio));
+      } else {
+        setFicha(desdeCatalogo(base, propio));
+      }
     } finally {
       setOpening(false);
     }
@@ -274,6 +566,67 @@ export default function HomePage() {
         </Fila>
       )}
 
+      {/* Ofertas ahora: 100% arriba (mezclado) + descuentos por tienda sin repetir */}
+      {(ofertasMeta.cargando || gratis.length > 0 || descuentos.length > 0) && (
+        <div className="space-y-5">
+          <div>
+            <h2 className="text-lg font-bold text-white">Ofertas ahora</h2>
+            <p className="text-xs text-zinc-400">
+              Precios en {moneda}
+              {tieneTasa ? null : (
+                <span className="text-amber-400/80"> · conversión pendiente</span>
+              )}
+              {ofertasMeta.actualizadoEn ? (
+                <span className="text-zinc-500">
+                  {' '}· actualizado {new Date(ofertasMeta.actualizadoEn).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ) : null}
+            </p>
+          </div>
+
+          {(ofertasMeta.cargando && gratis.length === 0 && descuentos.length === 0) ? (
+            <Fila titulo={<span className="text-zinc-400">Cargando ofertas…</span>}>
+              {Array.from({ length: 8 }, (_, i) => <CoverSkeleton key={i} />)}
+            </Fila>
+          ) : null}
+
+          {gratis.length > 0 && (
+            <Fila titulo={`Gratis / 100% de descuento`}>
+              {gratis.map((item) => (
+                <TileOferta
+                  key={item.id}
+                  item={item}
+                  fmtOferta={fmtOferta}
+                  conIconoPlataforma
+                  onAbrir={abrirOferta}
+                />
+              ))}
+            </Fila>
+          )}
+
+          {descuentos.map((fila) => (
+            <Fila
+              key={`dto-${fila.clave}`}
+              titulo={(
+                <span className="inline-flex items-center gap-2">
+                  <IconoPlataforma etiqueta={fila.plataforma} size={16} className="w-4 h-4" />
+                  {fila.plataforma}
+                </span>
+              )}
+            >
+              {(fila.items || []).map((item) => (
+                <TileOferta
+                  key={item.id}
+                  item={item}
+                  fmtOferta={fmtOferta}
+                  onAbrir={abrirOferta}
+                />
+              ))}
+            </Fila>
+          ))}
+        </div>
+      )}
+
       {/* Tus amigos están jugando */}
       {amigosJugando.length > 0 && (
         <Fila titulo="Tus amigos están jugando">
@@ -402,17 +755,15 @@ export default function HomePage() {
         onClose={() => setShowKeysModal(false)}
         onSaved={() => {
           setShowBanner(false);
+          setExplorando(true);
           API.get('/catalogo/sugerencias', { params: { seed: seedVisita() } })
             .then(({ data }) => {
-              setParecidos(data.paraTi || []);
-              setTendencias(data.tendencias || []);
-              setFilas((data.porFamilia || []).map((fila) => ({
-                marca: fila.nombre,
-                clave: fila.familia,
-                sugeridos: fila.sugeridos || [],
-              })));
+              aplicarSugerencias(data, {
+                setParecidos, setTendencias, setRecomendados, setFilas, setCasa,
+              });
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => setExplorando(false));
         }}
       />
     </div>

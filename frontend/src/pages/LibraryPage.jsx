@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import CoverTile, { CoverSkeleton } from '../components/CoverTile';
 import BannerTile from '../components/BannerTile';
 import Cover from '../components/Cover';
-import FichaDialog from '../components/FichaDialog';
 import GameSearch from '../components/GameSearch';
 import PlatformIcon from '../components/PlatformIcon';
 import { useToast } from '../components/Toast';
 import API from '../services/api';
-import { desdeBiblioteca } from '../lib/fichas';
 
 const SUCCESS_MS = 4000;
 
@@ -47,14 +45,13 @@ function clasificarPlataforma(juego) {
 
 export default function LibraryPage() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
   const [params] = useSearchParams();
   const juegoActivo = params.get('juego') || '';
   const [juegos, setJuegos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [success, setSuccess] = useState(location.state?.success || '');
-  const [saving, setSaving] = useState(false);
-  const [ficha, setFicha] = useState(null);
 
   // Filtros interactivos y modo de vista
   const [modoVista, setModoVista] = useState('grid'); // 'grid' | 'lista'
@@ -69,16 +66,18 @@ export default function LibraryPage() {
   }, [success]);
 
   useEffect(() => {
+    if (juegoActivo) {
+      navigate(`/library/${juegoActivo}`, { replace: true });
+    }
+  }, [juegoActivo, navigate]);
+
+  useEffect(() => {
     let active = true;
     setLoading(true);
     API.get('/juegos')
       .then(({ data }) => {
         if (!active) return;
         setJuegos(data);
-        if (juegoActivo) {
-          const elegido = data.find((juego) => juego.id === juegoActivo);
-          if (elegido) setFicha(desdeBiblioteca(elegido));
-        }
       })
       .catch((err) => {
         if (active) toast.show(errorMessage(err, 'No se pudo cargar la biblioteca'), 'error');
@@ -89,36 +88,10 @@ export default function LibraryPage() {
     return () => {
       active = false;
     };
-  }, [juegoActivo]);
+  }, []);
 
-  async function guardar(cambios) {
-    if (!ficha?.libraryId) return;
-    setSaving(true);
-    try {
-      const { data } = await API.patch(`/juegos/${ficha.libraryId}`, cambios);
-      setJuegos((prev) => prev.map((juego) => (juego.id === data.id ? data : juego)));
-      setFicha(desdeBiblioteca(data));
-      toast.show(`"${data.tituloJuego}" guardado correctamente.`);
-    } catch (err) {
-      toast.show(errorMessage(err, 'No se pudo guardar la ficha'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function quitar() {
-    if (!ficha?.libraryId) return;
-    setSaving(true);
-    try {
-      await API.delete(`/juegos/${ficha.libraryId}`);
-      setJuegos((prev) => prev.filter((juego) => juego.id !== ficha.libraryId));
-      toast.show(`"${ficha.titulo}" se quitó de tu biblioteca.`);
-      setFicha(null);
-    } catch (err) {
-      toast.show(errorMessage(err, 'No se pudo quitar el juego'), 'error');
-    } finally {
-      setSaving(false);
-    }
+  function abrirJuego(juego) {
+    navigate(`/library/${juego.id}`);
   }
 
   // Filtrado y ordenamiento de juegos
@@ -301,7 +274,7 @@ export default function LibraryPage() {
                     donde={juego.plataformas || juego.sistemas}
                     nota={juego.estado === 'COMPLETADO' ? juego.calificacion : ''}
                     ancho="w-full"
-                    onClick={() => setFicha(desdeBiblioteca(juego))}
+                    onClick={() => abrirJuego(juego)}
                   />
                 ))}
               </div>
@@ -317,7 +290,7 @@ export default function LibraryPage() {
                     estado={juego.estado}
                     nota={juego.estado === 'COMPLETADO' ? juego.calificacion : ''}
                     ancho="w-full"
-                    onClick={() => setFicha(desdeBiblioteca(juego))}
+                    onClick={() => abrirJuego(juego)}
                   />
                 ))}
               </div>
@@ -328,7 +301,7 @@ export default function LibraryPage() {
               {est.items.map((juego) => (
                 <div
                   key={juego.id}
-                  onClick={() => setFicha(desdeBiblioteca(juego))}
+                  onClick={() => abrirJuego(juego)}
                   className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-3 hover:border-amber-400/40 hover:bg-zinc-900/90 transition-all duration-200 cursor-pointer"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
@@ -384,16 +357,6 @@ export default function LibraryPage() {
           )}
         </section>
       ))}
-
-      {ficha && (
-        <FichaDialog
-          item={ficha}
-          saving={saving}
-          onClose={() => setFicha(null)}
-          onSave={guardar}
-          onDelete={quitar}
-        />
-      )}
     </div>
   );
 }

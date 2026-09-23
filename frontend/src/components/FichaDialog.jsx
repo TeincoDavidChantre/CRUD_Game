@@ -1,14 +1,75 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  Ban,
+  Bookmark,
+  Check,
+  ChevronDown,
+  Clock,
+  Download,
+  ExternalLink,
+  FileText,
+  Gamepad2,
+  Hourglass,
+  MessageSquare,
+  MessagesSquare,
+  Plus,
+  Settings,
+  Star,
+  Tags,
+  Trash2,
+  Trophy,
+  Users,
+  Wifi,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import Cover from './Cover';
-import Metacritic from './Metacritic';
+import { ScoreBadge } from './Metacritic';
 import PlatformIcon from './PlatformIcon';
-import { ListaPlataformas } from './IconoPlataforma';
+import IconoPlataforma, { ListaPlataformas } from './IconoPlataforma';
 import API from '../services/api';
-import { ESTADOS, anioDe, unirLinea, partir } from '../lib/fichas';
+import { anioDe, partir, clasificarDisponibilidad } from '../lib/fichas';
+import { useMonedaLocal } from '../lib/moneda';
+import { sinopsisParaMostrar } from '../lib/sinopsis';
 import ErrorBoundary from './ErrorBoundary';
 
+function puntuacionesExternas(item) {
+  const lista = [];
+  if (item?.metacritic != null) lista.push({ fuente: 'Metacritic', nota: item.metacritic });
+  if (item?.openCritic != null) lista.push({ fuente: 'OpenCritic', nota: item.openCritic });
+  if (item?.igdbRating != null) lista.push({ fuente: 'IGDB', nota: item.igdbRating });
+  if (Array.isArray(item?.puntuaciones)) {
+    for (const p of item.puntuaciones) {
+      if (p?.fuente && p?.nota != null && !lista.some((x) => x.fuente === p.fuente)) {
+        lista.push({ fuente: p.fuente, nota: p.nota });
+      }
+    }
+  }
+  return lista;
+}
+
+function textoJugadores(item) {
+  if (item?.jugadores) return String(item.jugadores).trim();
+  if (item?.modosJuego) {
+    const modos = partir(item.modosJuego);
+    if (modos.length) return modos.join(' · ');
+  }
+  return '';
+}
+
+function estadoInternet(item) {
+  if (typeof item?.requiereInternet === 'boolean') return item.requiereInternet;
+  if (typeof item?.online === 'boolean') return item.online;
+  const raw = String(item?.conexion || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (/requer|obligat|necesita|always|siempre|online only|online-only/.test(raw)) return true;
+  if (/no\b|offline|sin conex|local/.test(raw)) return false;
+  return null;
+}
+
 function FichaDialogContent({ item, opening = false, saving = false, onClose, onAdd, onSave, onDelete }) {
+  const { fmtOferta } = useMonedaLocal();
   const plataformasJuego = [...new Set([...partir(item?.donde), ...partir(item?.sistemas), ...partir(item?.plataformas)])].filter((p) => p.length > 1);
   const opcionesPlataforma = plataformasJuego.length > 0 ? plataformasJuego : ['PC', 'PlayStation 5', 'Nintendo Switch', 'Xbox Series X|S', 'Android', 'iOS'];
 
@@ -96,40 +157,196 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
       <div onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="ficha-titulo" className="grid max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-zinc-950 shadow-2xl md:grid-cols-[280px_1fr] animate-modal-up">
         <Cover src={item.portada} alt={item.titulo} frameClassName="min-h-72 w-full md:min-h-full" />
         <div className="flex flex-col gap-4 p-5 md:p-6">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">{item.libraryId ? 'En tu biblioteca' : 'Ficha'}</p>
-            <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">Cerrar</button>
-          </div>
-          <div>
-            {item.etiqueta ? <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">{item.etiqueta}</p> : null}
-            <h2 id="ficha-titulo" className="text-3xl font-black tracking-tight">{item.titulo}</h2>
-            <ListaPlataformas etiquetas={partir(item.donde)} size={15} className="mt-2 text-sm text-amber-200" />
-            <ListaPlataformas etiquetas={partir(item.sistemas)} size={14} className="mt-1 text-sm text-zinc-300" />
-            <p className="mt-1 text-sm text-zinc-400">{[anioDe(item.lanzamiento), item.desarrollador].filter(Boolean).join(' · ')}</p>
-            {partir(item.ediciones).length > 0 && <p className="text-sm text-zinc-400">Edición: {partir(item.ediciones).join(', ')}</p>}
-            {partir(item.generos).length > 0 && <p className="text-sm text-zinc-400">{partir(item.generos).join(', ')}</p>}
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Metacritic nota={item.metacritic} />
-              <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300">
-                <span className="font-bold">⭐ {comunidad.promedio ? `${comunidad.promedio} / 5` : 'Sin nota comunitaria'}</span>
-                <span className="text-zinc-400">({comunidad.totalVotos} {comunidad.totalVotos === 1 ? 'voto' : 'votos'})</span>
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                {item.etiqueta ? <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">{item.etiqueta}</p> : null}
+                {item.logoUrl ? (
+                  <img
+                    src={item.logoUrl}
+                    alt=""
+                    className="max-h-16 w-auto max-w-full object-contain"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const titulo = document.getElementById('ficha-titulo');
+                      if (titulo) titulo.classList.remove('sr-only');
+                    }}
+                  />
+                ) : null}
+                <h2
+                  id="ficha-titulo"
+                  className={`text-3xl font-black tracking-tight text-white ${item.logoUrl ? 'sr-only' : ''}`}
+                >
+                  {item.titulo}
+                </h2>
               </div>
+              <button type="button" onClick={onClose} className="shrink-0 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">Cerrar</button>
             </div>
+
+            {/* 2. Puntuaciones externas */}
+            {(() => {
+              const scores = puntuacionesExternas(item);
+              if (scores.length === 0) return null;
+              return (
+                <div className="flex flex-wrap items-center gap-2">
+                  {scores.map((s) => (
+                    <ScoreBadge key={s.fuente} fuente={s.fuente} nota={s.nota} />
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* 3. Nota de la plataforma (GameTracker) */}
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300">
+              <Star className="h-3.5 w-3.5 shrink-0 fill-amber-300/80" aria-hidden="true" />
+              <span className="font-bold">
+                {comunidad.promedio ? `${comunidad.promedio} / 5` : 'Sin nota comunitaria'}
+              </span>
+              <span className="text-zinc-400">
+                ({comunidad.totalVotos} {comunidad.totalVotos === 1 ? 'voto' : 'votos'})
+              </span>
+            </div>
+
+            {/* 4–5. Plataformas/tiendas, luego consolas (sin solape ni títulos) */}
+            {(() => {
+              const { tiendas, consolas } = clasificarDisponibilidad(item);
+              return (
+                <>
+                  {tiendas.length > 0 && <ListaPlataformas etiquetas={tiendas} size={15} className="text-sm" />}
+                  {consolas.length > 0 && <ListaPlataformas etiquetas={consolas} size={15} className="text-sm" />}
+                </>
+              );
+            })()}
+
+            {/* 6–7. Desarrollador y año (sin rótulos) */}
+            {item.desarrollador ? (
+              <p className="text-sm text-zinc-300">{item.desarrollador}</p>
+            ) : null}
+            {anioDe(item.lanzamiento) ? (
+              <p className="text-sm text-zinc-400">{anioDe(item.lanzamiento)}</p>
+            ) : null}
+
+            {/* Ediciones (si hay) */}
+            {partir(item.ediciones).length > 0 && (
+              <p className="text-sm text-zinc-400">Edición: {partir(item.ediciones).join(', ')}</p>
+            )}
+
+            {/* 8. Etiquetas / géneros */}
+            {partir(item.generos).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {partir(item.generos).map((g) => (
+                  <span
+                    key={g}
+                    className="rounded-lg border border-zinc-700 bg-zinc-900/60 px-2 py-0.5 text-xs font-medium text-zinc-200"
+                  >
+                    {g}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* 9. Jugadores (si hay dato) */}
+            {textoJugadores(item) ? (
+              <p className="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-200">
+                <Users className="w-4 h-4 shrink-0 text-amber-500" aria-hidden="true" />
+                <span>{textoJugadores(item)}</span>
+              </p>
+            ) : null}
+
+            {/* 10. Conexión a internet (si hay dato) */}
+            {(() => {
+              const online = estadoInternet(item);
+              if (online === null) return null;
+              return (
+                <p className="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-200">
+                  {online ? (
+                    <Wifi className="w-4 h-4 shrink-0 text-amber-500" aria-hidden="true" />
+                  ) : (
+                    <WifiOff className="w-4 h-4 shrink-0 text-zinc-400" aria-hidden="true" />
+                  )}
+                  <span>{online ? 'Requiere conexión' : 'No requiere conexión a internet'}</span>
+                </p>
+              );
+            })()}
+
+            {/* Tiempos HLTB (si hay dato) */}
+            {(item.hltbMain || item.hltbMainExtra || item.hltbCompletionist || item.hltb) ? (
+              <p className="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-200">
+                <Clock className="w-4 h-4 shrink-0 text-amber-500" aria-hidden="true" />
+                <span>
+                  {[
+                    item.hltbMain ? `Historia: ${item.hltbMain}h` : null,
+                    item.hltbMainExtra ? `+Extras: ${item.hltbMainExtra}h` : null,
+                    item.hltbCompletionist ? `Completista: ${item.hltbCompletionist}h` : null,
+                    !item.hltbMain && !item.hltbCompletionist && item.hltb ? String(item.hltb) : null,
+                  ].filter(Boolean).join(' | ')}
+                </span>
+              </p>
+            ) : null}
           </div>
+
           {/* Tab bar */}
           <div className="flex border-b border-zinc-800">
-            {[['info','📋 Info'],['registro','🎮 Mi Registro'],['comunidad','💬 Comunidad']].map(([id,label])=>(
-              <button key={id} type="button" onClick={()=>setTab(id)}
-                className={`flex-1 px-3 py-2.5 text-xs font-semibold transition-colors ${
-                  tab===id ? 'border-b-2 border-amber-400 text-amber-300' : 'text-zinc-400 hover:text-zinc-200'
-                }`}>{label}</button>
+            {[
+              ['info', FileText, 'Info'],
+              ['registro', Gamepad2, 'Mi Registro'],
+              ['comunidad', MessagesSquare, 'Comunidad'],
+            ].map(([id, Icono, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                className={`flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-colors ${
+                  tab === id ? 'border-b-2 border-amber-400 text-amber-300' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Icono className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden="true" />
+                {label}
+              </button>
             ))}
           </div>
 
           {tab === 'info' && (
             <>
               {opening ? <p className="text-sm text-zinc-400">Cargando especificaciones...</p> : null}
-              {item.descripcion && <p className="text-sm leading-6 text-zinc-300">{item.descripcion}</p>}
+
+              {item.ofertaMeta && (item.ofertaMeta.gratis || item.ofertaMeta.precio != null) ? (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-200">
+                  {item.ofertaMeta.gratis ? (
+                    <p className="font-semibold">
+                      Gratis ahora{item.ofertaMeta.tienda ? ` en ${item.ofertaMeta.tienda}` : ''}
+                      {item.ofertaMeta.precioAntes != null ? (
+                        <span className="ml-2 font-normal text-zinc-400 line-through">
+                          {fmtOferta(item.ofertaMeta.precioAntes, item.ofertaMeta.moneda || 'USD')}
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : (
+                    <p className="font-semibold">
+                      Oferta{item.ofertaMeta.ahorroPct ? ` −${item.ofertaMeta.ahorroPct}%` : ''}
+                      {item.ofertaMeta.tienda ? ` · ${item.ofertaMeta.tienda}` : ''}
+                      {item.ofertaMeta.precio != null ? (
+                        <span className="ml-2 text-emerald-300">
+                          {fmtOferta(item.ofertaMeta.precio, item.ofertaMeta.moneda || 'USD')}
+                        </span>
+                      ) : null}
+                      {item.ofertaMeta.precioAntes != null ? (
+                        <span className="ml-1 font-normal text-zinc-500 line-through">
+                          {fmtOferta(item.ofertaMeta.precioAntes, item.ofertaMeta.moneda || 'USD')}
+                        </span>
+                      ) : null}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+
+              {sinopsisParaMostrar(item.descripcion) ? (
+                <p className="text-sm leading-6 text-zinc-300">{sinopsisParaMostrar(item.descripcion)}</p>
+              ) : item.descripcion ? (
+                <p className="text-sm text-zinc-500">Sinopsis no disponible (el texto recuperado no correspondía a un videojuego).</p>
+              ) : !opening ? (
+                <p className="text-sm text-zinc-500">Sinopsis aún no disponible para este título.</p>
+              ) : null}
 
               {/* Enlaces a tiendas oficiales de compra según plataforma */}
               {(() => {
@@ -137,39 +354,65 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                 if (typeof tiendas === 'string') {
                   try { tiendas = JSON.parse(tiendas); } catch { tiendas = {}; }
                 }
-                if (!tiendas || typeof tiendas !== 'object' || Object.keys(tiendas).length === 0) return null;
+                if (!tiendas || typeof tiendas !== 'object') tiendas = {};
+                const hay = Object.values(tiendas).some(Boolean);
+                if (!hay) return null;
                 return (
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
-                    <p className="mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Dónde comprar:</p>
+                    <p className="mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Dónde comprar / reclamar:</p>
                     <div className="flex flex-wrap gap-2">
                       {tiendas.steam && (
                         <a href={tiendas.steam} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-700">
-                          Steam ↗
+                          <IconoPlataforma etiqueta="Steam" size={14} className="w-3.5 h-3.5 text-zinc-200" />
+                          Steam
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                       {tiendas.playstation && (
                         <a href={tiendas.playstation} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-950/40 px-3 py-1.5 text-xs font-semibold text-blue-200 transition hover:bg-blue-900/60">
-                          PlayStation Store ↗
+                          <IconoPlataforma etiqueta="PlayStation" size={14} className="w-3.5 h-3.5 text-blue-200" />
+                          PlayStation Store
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                       {tiendas.xbox && (
                         <a href={tiendas.xbox} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-900/60">
-                          Xbox Store ↗
+                          <IconoPlataforma etiqueta="Xbox" size={14} className="w-3.5 h-3.5 text-emerald-200" />
+                          Xbox Store
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                       {tiendas.nintendo && (
                         <a href={tiendas.nintendo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-950/40 px-3 py-1.5 text-xs font-semibold text-red-200 transition hover:bg-red-900/60">
-                          Nintendo eShop ↗
+                          <IconoPlataforma etiqueta="Nintendo" size={14} className="w-3.5 h-3.5 text-red-200" />
+                          Nintendo eShop
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                       {tiendas.epic && (
                         <a href={tiendas.epic} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-700">
-                          Epic Games ↗
+                          <IconoPlataforma etiqueta="Epic Games" size={14} className="w-3.5 h-3.5 text-zinc-200" />
+                          Epic Games
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                       {tiendas.gog && (
                         <a href={tiendas.gog} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/40 bg-purple-950/40 px-3 py-1.5 text-xs font-semibold text-purple-200 transition hover:bg-purple-900/60">
-                          GOG ↗
+                          <IconoPlataforma etiqueta="GOG" size={14} className="w-3.5 h-3.5 text-purple-200" />
+                          GOG
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
+                        </a>
+                      )}
+                      {tiendas.humble && (
+                        <a href={tiendas.humble} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-orange-500/40 bg-orange-950/40 px-3 py-1.5 text-xs font-semibold text-orange-200 transition hover:bg-orange-900/60">
+                          Humble
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
+                        </a>
+                      )}
+                      {tiendas.oferta && (
+                        <a href={tiendas.oferta} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-900/60">
+                          Ver oferta
+                          <ExternalLink className="w-3 h-3 opacity-70" aria-hidden="true" />
                         </a>
                       )}
                     </div>
@@ -182,20 +425,32 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
           {tab === 'registro' && (
           <form onSubmit={enviarFormulario} className="mt-2 space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 backdrop-blur-sm">
             <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                {item.libraryId ? '⚙️ Tu seguimiento en biblioteca' : '📥 Guardar en tu biblioteca'}
+              <h3 className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-300">
+                {item.libraryId ? (
+                  <>
+                    <Settings className="w-3.5 h-3.5" aria-hidden="true" />
+                    Tu seguimiento en biblioteca
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    Guardar en tu biblioteca
+                  </>
+                )}
               </h3>
               {item.libraryId && (
-                <Link to={`/library?juego=${item.libraryId}`} onClick={onClose} className="text-xs text-zinc-400 hover:text-amber-300 hover:underline">
-                  Ver estantería ↗
+                <Link to={`/library/${item.libraryId}`} onClick={onClose} className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-amber-300 hover:underline">
+                  Ver estantería
+                  <ExternalLink className="w-3 h-3" aria-hidden="true" />
                 </Link>
               )}
             </div>
 
             {/* Selector de Plataforma / Consola */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-                🎮 ¿En qué plataforma o consola lo juegas?
+              <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                <Gamepad2 className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                ¿En qué plataforma o consola lo juegas?
               </label>
               <div className="flex flex-wrap gap-1.5">
                 {opcionesPlataforma.map((plat) => {
@@ -222,13 +477,14 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                 <button
                   type="button"
                   onClick={() => setMostrarOtra(!mostrarOtra)}
-                  className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition border ${
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition border ${
                     mostrarOtra
                       ? 'bg-amber-400 text-zinc-950 border-amber-400 font-bold'
                       : 'bg-zinc-800/40 text-zinc-400 border-dashed border-zinc-700 hover:text-zinc-200 hover:border-zinc-500'
                   }`}
                 >
-                  + Otra consola
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  Otra consola
                 </button>
               </div>
               {mostrarOtra && (
@@ -244,17 +500,19 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
 
             {/* Selector de Estado */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-                📌 Estado de tu partida
+              <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                <Bookmark className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                Estado de tu partida
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {[
-                  { id: 'PENDIENTE', label: 'Pendiente', icon: '⏳', activeClass: 'border-blue-500 bg-blue-500/20 text-blue-300' },
-                  { id: 'JUGANDO', label: 'Jugando', icon: '🎮', activeClass: 'border-emerald-500 bg-emerald-500/20 text-emerald-300' },
-                  { id: 'COMPLETADO', label: 'Completado', icon: '🏆', activeClass: 'border-amber-500 bg-amber-500/20 text-amber-300' },
-                  { id: 'ABANDONADO', label: 'Abandonado', icon: '🛑', activeClass: 'border-rose-500 bg-rose-500/20 text-rose-300' },
+                  { id: 'PENDIENTE', label: 'Pendiente', Icono: Hourglass, activeClass: 'border-blue-500 bg-blue-500/20 text-blue-300' },
+                  { id: 'JUGANDO', label: 'Jugando', Icono: Gamepad2, activeClass: 'border-emerald-500 bg-emerald-500/20 text-emerald-300' },
+                  { id: 'COMPLETADO', label: 'Completado', Icono: Trophy, activeClass: 'border-amber-500 bg-amber-500/20 text-amber-300' },
+                  { id: 'ABANDONADO', label: 'Abandonado', Icono: Ban, activeClass: 'border-rose-500 bg-rose-500/20 text-rose-300' },
                 ].map((s) => {
                   const activa = estado === s.id;
+                  const IconoEstado = s.Icono;
                   return (
                     <button
                       key={s.id}
@@ -264,7 +522,7 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                         activa ? s.activeClass + ' shadow-sm' : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:bg-zinc-800'
                       }`}
                     >
-                      <span>{s.icon}</span>
+                      <IconoEstado className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                       <span>{s.label}</span>
                     </button>
                   );
@@ -274,8 +532,9 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
 
             {!item.libraryId && !mostrarOpciones && (
               <button type="button" onClick={() => setMostrarOpciones(true)}
-                className="text-xs text-amber-400 hover:text-amber-300 transition">
-                Más opciones ▾
+                className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition">
+                Más opciones
+                <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             )}
 
@@ -284,8 +543,9 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
             {/* Calificación Interactiva de 1 a 5 estrellas */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-semibold text-zinc-300">
-                  ⭐ Tu puntuación personal {estado === 'COMPLETADO' && <span className="text-amber-400 font-bold">*</span>}
+                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                  <Star className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                  Tu puntuación personal {estado === 'COMPLETADO' && <span className="text-amber-400 font-bold">*</span>}
                 </label>
                 {calificacion && (
                   <button type="button" onClick={() => setCalificacion('')} className="text-[10px] text-zinc-500 hover:text-zinc-300">
@@ -300,13 +560,17 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                       key={estrella}
                       type="button"
                       onClick={() => setCalificacion(estrella)}
-                      className={`text-2xl transition hover:scale-115 ${
+                      className={`rounded p-0.5 transition hover:scale-110 ${
                         Number(calificacion) >= estrella
-                          ? 'text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]'
+                          ? 'text-amber-400'
                           : 'text-zinc-700 hover:text-amber-300'
                       }`}
+                      aria-label={`${estrella} de 5`}
                     >
-                      ★
+                      <Star
+                        className={`h-6 w-6 ${Number(calificacion) >= estrella ? 'fill-amber-400' : ''}`}
+                        aria-hidden="true"
+                      />
                     </button>
                   ))}
                 </div>
@@ -318,8 +582,9 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
 
             {/* Notas / Reseña personal */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                💬 Comentario o reseña personal (opcional)
+              <label className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                <MessageSquare className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                Comentario o reseña personal (opcional)
               </label>
               <textarea
                 value={comentario}
@@ -333,8 +598,9 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
             {/* Etiquetas rápidas y removibles */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-zinc-300">
-                  🏷️ Etiquetas personales
+                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                  <Tags className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                  Etiquetas personales
                 </label>
                 <span className="text-[10px] text-zinc-400">Separadas por coma</span>
               </div>
@@ -356,7 +622,7 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                         className="hover:text-white transition rounded p-0.5"
                         aria-label={`Eliminar etiqueta ${etq}`}
                       >
-                        ✕
+                        <X className="w-3 h-3" aria-hidden="true" />
                       </button>
                     </span>
                   ))}
@@ -383,13 +649,14 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                           setEtiquetas((prev) => (prev ? `${prev}, ${chip}` : chip));
                         }
                       }}
-                      className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition ${
                         yaTiene
                           ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
                           : 'bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
                       }`}
                     >
-                      {yaTiene ? `✓ ${chip}` : `+ ${chip}`}
+                      {yaTiene ? <Check className="w-3 h-3" aria-hidden="true" /> : <Plus className="w-3 h-3" aria-hidden="true" />}
+                      {chip}
                     </button>
                   );
                 })}
@@ -408,7 +675,7 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                 disabled={saving}
                 className="flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-zinc-950 shadow-md shadow-amber-400/10 transition hover:bg-amber-300 active:scale-95 disabled:opacity-60"
               >
-                <span>{item.libraryId ? '✓' : '+'}</span>
+                {item.libraryId ? <Check className="w-4 h-4" aria-hidden="true" /> : <Plus className="w-4 h-4" aria-hidden="true" />}
                 <span>{saving ? 'Guardando...' : (item.libraryId ? 'Guardar cambios' : 'Añadir a mi biblioteca')}</span>
               </button>
 
@@ -417,9 +684,10 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                   <button
                     type="button"
                     onClick={() => setConfirmar(true)}
-                    className="rounded-lg px-3 py-1.5 text-xs text-zinc-400 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-zinc-400 hover:bg-rose-500/10 hover:text-rose-400 transition"
                   >
-                    🗑 Quitar de biblioteca
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    Quitar de biblioteca
                   </button>
                 )
               )}
@@ -458,8 +726,9 @@ function FichaDialogContent({ item, opening = false, saving = false, onClose, on
                         @{resena.autor.username}
                       </Link>
                       {resena.calificacion && (
-                        <span className="rounded bg-amber-400/20 px-1.5 py-0.5 font-bold text-amber-300">
-                          ★ {resena.calificacion}/5
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-400/20 px-1.5 py-0.5 font-bold text-amber-300">
+                          <Star className="w-3 h-3 fill-amber-300" aria-hidden="true" />
+                          {resena.calificacion}/5
                         </span>
                       )}
                     </div>

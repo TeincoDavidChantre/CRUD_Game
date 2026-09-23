@@ -1,4 +1,5 @@
 import Cover from './Cover';
+import IconoPlataforma from './IconoPlataforma';
 import PlatformIcon from './PlatformIcon';
 import { partir, unirLinea } from '../lib/fichas';
 
@@ -16,11 +17,27 @@ const PUNTO = {
   ABANDONADO: 'bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.9)]',
 };
 
-export default function CoverTile({ titulo, portada, donde, estado, nota, sugerido = false, onClick, ancho = 'w-36 shrink-0 snap-start sm:w-40', minimo = false }) {
+export default function CoverTile({
+  titulo,
+  portada,
+  portadas = [],
+  donde,
+  estado,
+  nota,
+  sugerido = false,
+  badge = null,
+  plataformaIcono = null,
+  onClick,
+  ancho = 'w-36 shrink-0 snap-start sm:w-40',
+  minimo = false,
+}) {
+  const fallbacks = (Array.isArray(portadas) ? portadas : []).filter((u) => u && u !== portada);
   const labelAria = [
     titulo,
     estado ? `Estado: ${estado.toLowerCase()}` : null,
     nota ? `Calificación: ${nota} de 5` : null,
+    badge ? String(badge) : null,
+    plataformaIcono ? `En ${plataformaIcono}` : null,
     donde ? `Disponible en ${unirLinea(donde)}` : null,
   ].filter(Boolean).join('. ');
 
@@ -32,19 +49,21 @@ export default function CoverTile({ titulo, portada, donde, estado, nota, sugeri
       className={`group ${ancho} text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-2xl`}
     >
       <span className="relative block overflow-hidden rounded-2xl bg-zinc-950 shadow-md ring-1 ring-white/10 transition-all duration-300 group-hover:-translate-y-1.5 group-hover:ring-amber-400/60 group-hover:shadow-[0_12px_30px_rgba(0,0,0,0.85),0_0_18px_rgba(251,191,36,0.2)]">
-        <Cover src={portada} alt={titulo} frameClassName="aspect-[2/3] w-full" />
+        <Cover
+          src={portada}
+          alt={titulo}
+          fallbacks={fallbacks}
+          frameClassName="aspect-[2/3] w-full"
+        />
 
-        {/* Gradiente inferior para contraste */}
         <span className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
 
-        {/* Badge de Estado Completo */}
         {estado && !minimo && (
           <span className={`absolute left-2.5 top-2.5 rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider shadow-sm backdrop-blur-md ${CINTA[estado] || 'bg-zinc-200 text-zinc-950'}`}>
             {estado}
           </span>
         )}
 
-        {/* Badge de Estado Minimalista (LED Glow) */}
         {estado && minimo && (
           <span className="absolute left-2.5 top-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-zinc-200 backdrop-blur-md ring-1 ring-white/10">
             <span className={`h-2 w-2 rounded-full ${PUNTO[estado] || 'bg-zinc-300'}`} />
@@ -52,14 +71,24 @@ export default function CoverTile({ titulo, portada, donde, estado, nota, sugeri
           </span>
         )}
 
-        {/* Indicador de Sugerido */}
-        {sugerido && (
+        {plataformaIcono && !estado && (
+          <span className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-black/70 text-zinc-100 ring-1 ring-white/15 backdrop-blur-md">
+            <IconoPlataforma etiqueta={plataformaIcono} size={14} className="h-3.5 w-3.5" />
+          </span>
+        )}
+
+        {badge ? (
+          <span className="absolute right-2.5 top-2.5 rounded-md bg-emerald-500 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-white shadow-md">
+            {badge}
+          </span>
+        ) : null}
+
+        {sugerido && !badge && (
           <span className="absolute right-2.5 top-2.5 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-bold text-zinc-950 shadow-md">
             ★ Top
           </span>
         )}
 
-        {/* Badge de Calificación */}
         {nota ? (
           <span className="absolute bottom-2.5 right-2.5 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-xs font-bold text-amber-300 ring-1 ring-amber-400/30 backdrop-blur-md shadow-md">
             <span>★</span>
@@ -91,4 +120,3 @@ export function CoverSkeleton({ ancho = 'w-36 shrink-0 sm:w-40' }) {
     </div>
   );
 }
-

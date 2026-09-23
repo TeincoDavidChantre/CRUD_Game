@@ -232,9 +232,11 @@ function conPortada(ficha) {
   const url = ficha.portada || ficha.urlPortada || '';
   if (!url) return false;
   if (/\/03_teaser_module|artworkUrl100|100x100|gc_default|default_en/i.test(url)) return false;
+  if (/\/screenshots?\//i.test(url) || /rawg\.io\/media\/screenshots/i.test(url)) return false;
   if (ficha.portadaVertical || esPortadaVerticalOptima(url) || esCaratulaOficial(url)) return true;
   if (/mzstatic\.com/.test(url) && !/100x100|artworkUrl100/i.test(url)) return true;
   if (/nintendo\.com/.test(url) && (/\/05_packshots\//.test(url) || (/\/portrait\//.test(url) && !/default/i.test(url)))) return true;
+  if (/media\.rawg\.io\/media\/(?:resize\/[^/]+\/)?games\//i.test(url)) return true;
   return false;
 }
 
@@ -289,12 +291,13 @@ function barajar(lista, seedTexto) {
 async function buscarCandidatos(perfil) {
   const consultas = [];
   const vistas = new Set();
+  const MAX_CONSULTAS = 8;
 
   function agregar(q, fuente, porEtiqueta = false) {
     const texto = String(q || '').trim();
     if (texto.length < 2) return;
     const clave = `${fuente}:${normalizar(texto)}:${porEtiqueta ? 'e' : 't'}`;
-    if (vistas.has(clave) || consultas.length >= 24) return;
+    if (vistas.has(clave) || consultas.length >= MAX_CONSULTAS) return;
     vistas.add(clave);
     consultas.push({ q: texto, fuente, porEtiqueta });
   }
@@ -303,7 +306,8 @@ async function buscarCandidatos(perfil) {
   const perfilPlataformas = clavesEtiqueta.has('plataformas')
     || (clavesEtiqueta.has('indie') && (clavesEtiqueta.has('aventura') || clavesEtiqueta.has('adventure') || clavesEtiqueta.has('action') || clavesEtiqueta.has('accion')));
 
-  for (const juego of perfil.semillas.slice(0, 4)) {
+  // Semillas de saga (máx. 3) — base del "Para ti"
+  for (const juego of perfil.semillas.slice(0, 3)) {
     const serie = serieDe(juego.tituloJuego);
     const fuente = fuenteParaClave(claveFila(marcasPropias(juego)[0] || '')) || 'steam';
     agregar(serie, fuente, false);
@@ -313,39 +317,35 @@ async function buscarCandidatos(perfil) {
     agregar('platformer', 'steam', true);
     agregar('metroidvania', 'steam', true);
   }
-  for (const [etiqueta] of perfil.etiquetasTop.slice(0, 2)) {
+  for (const [etiqueta] of perfil.etiquetasTop.slice(0, 1)) {
     const q = CONSULTA_ETIQUETA[etiqueta];
     if (!q || q.length < 4) continue;
     agregar(q, 'steam', true);
   }
 
-  for (const clave of perfil.familiasTop) {
+  // Una consulta afín por familia top (no bombear Nintendo con 6+ términos)
+  for (const clave of perfil.familiasTop.slice(0, 3)) {
     const fuente = fuenteParaClave(clave);
     const semillasFam = perfil.semillas.filter((juego) => marcasPropias(juego).some((m) => claveFila(m) === clave));
-    for (const juego of semillasFam.slice(0, 1)) {
-      agregar(serieDe(juego.tituloJuego), fuente, false);
+    if (semillasFam[0]) {
+      agregar(serieDe(semillasFam[0].tituloJuego), fuente, false);
     }
     if (fuente === 'apple') {
-      agregar('action', 'apple', true);
       agregar('adventure', 'apple', true);
-      for (const juego of semillasFam.slice(0, 1)) agregar(serieDe(juego.tituloJuego), 'apple', true);
     } else if (CONSOLAS_NINTENDO.has(clave)) {
-      const afines = AFINES_NINTENDO[clave] || ['Zelda', 'Mario', 'Metroid', 'Kirby'];
+      const afines = (AFINES_NINTENDO[clave] || ['Zelda', 'Mario']).slice(0, 2);
       for (const q of afines) agregar(q, 'nintendo', false);
-      // Ampliación sin cercanía estricta para rellenar ~25 por consola
-      agregar(clave === 'Game Boy Advance' ? 'Game Boy' : clave, 'nintendo', true);
-      agregar('Nintendo', 'nintendo', true);
     } else if (fuente === 'steam') {
       agregar('indie', 'steam', true);
-      agregar('adventure', 'steam', true);
-    } else if (fuente === 'playstation' || fuente === 'microsoft') {
-      for (const juego of perfil.semillas.slice(0, 2)) agregar(serieDe(juego.tituloJuego), fuente, false);
+    } else if ((fuente === 'playstation' || fuente === 'microsoft') && perfil.semillas[0]) {
+      agregar(serieDe(perfil.semillas[0].tituloJuego), fuente, false);
     }
   }
 
   const listas = await Promise.all(consultas.map(async ({ q, fuente, porEtiqueta }) => {
     try {
-      const crudas = await buscarFichas(q, 20, fuente, { porEtiqueta });
+      // rapido: sin completarPortadas (carátulas pesadas) — el inicio solo necesita cover usable
+      const crudas = await buscarFichas(q, 16, fuente, { porEtiqueta, rapido: true });
       const boostTag = porEtiqueta && (q === 'platformer' || q === 'metroidvania') ? 5 : porEtiqueta ? 2.2 : 3.5;
       return crudas.map((f) => ({ ...f, _porEtiqueta: porEtiqueta, _boost: boostTag }));
     } catch {
@@ -353,11 +353,12 @@ async function buscarCandidatos(perfil) {
     }
   }));
 
-  // Catálogo por consola Nintendo (relleno real de Switch/GameCube/N64…)
+  // Catálogo por consola Nintendo: solo 1–2 consolas top, tope bajo
+  const consolasTop = perfil.familiasTop.filter((c) => CONSOLAS_NINTENDO.has(c)).slice(0, 2);
   const porConsola = await Promise.all(
-    perfil.familiasTop.filter((c) => CONSOLAS_NINTENDO.has(c)).map(async (consola) => {
+    consolasTop.map(async (consola) => {
       try {
-        const fichas = await buscarNintendoPorConsola(consola, 30);
+        const fichas = await buscarNintendoPorConsola(consola, 20);
         return fichas.map((f) => ({ ...f, _porEtiqueta: false, _boost: 4 }));
       } catch {
         return [];

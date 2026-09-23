@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../services/api';
+import Avatar from '../components/Avatar';
 
 export default function FriendsPage() {
   const [tab, setTab] = useState('amigos'); // 'amigos' | 'solicitudes' | 'buscar'
@@ -157,9 +158,12 @@ export default function FriendsPage() {
                   className="flex items-center justify-between rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 transition hover:border-zinc-700"
                 >
                   <Link to={`/perfil/${amigo.username}`} className="flex items-center gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-400 text-lg font-black text-zinc-950">
-                      {amigo.nombre ? amigo.nombre.charAt(0).toUpperCase() : 'U'}
-                    </div>
+                    <Avatar
+                      perfil={amigo}
+                      className="h-12 w-12 text-lg"
+                      rounded="rounded-xl"
+                      fallbackClassName="bg-amber-400 font-black text-zinc-950"
+                    />
                     <div>
                       <p className="font-bold text-white hover:text-amber-400 transition">{amigo.nombre}</p>
                       <p className="text-xs text-zinc-400">@{amigo.username}</p>
@@ -206,9 +210,12 @@ export default function FriendsPage() {
                     className="flex items-center justify-between rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
                   >
                     <Link to={`/perfil/${solicitante.username}`} className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-400 text-sm font-black text-zinc-950">
-                        {solicitante.nombre ? solicitante.nombre.charAt(0).toUpperCase() : 'U'}
-                      </div>
+                      <Avatar
+                        perfil={solicitante}
+                        className="h-10 w-10 text-sm"
+                        rounded="rounded-xl"
+                        fallbackClassName="bg-amber-400 font-black text-zinc-950"
+                      />
                       <div>
                         <p className="font-bold text-white">{solicitante.nombre}</p>
                         <p className="text-xs text-zinc-400">@{solicitante.username}</p>
@@ -253,9 +260,12 @@ export default function FriendsPage() {
                     className="flex items-center justify-between rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-4"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-sm font-bold text-zinc-300">
-                        {receptor.nombre ? receptor.nombre.charAt(0).toUpperCase() : 'U'}
-                      </div>
+                      <Avatar
+                        perfil={receptor}
+                        className="h-10 w-10 text-sm"
+                        rounded="rounded-xl"
+                        fallbackClassName="bg-zinc-800 font-bold text-zinc-300"
+                      />
                       <div>
                         <p className="font-bold text-zinc-300">{receptor.nombre}</p>
                         <p className="text-xs text-zinc-500">@{receptor.username} · Pendiente</p>
@@ -310,9 +320,12 @@ export default function FriendsPage() {
                   className="flex items-center justify-between rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
                 >
                   <Link to={`/perfil/${u.username}`} className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-400 text-sm font-black text-zinc-950">
-                      {u.nombre ? u.nombre.charAt(0).toUpperCase() : 'U'}
-                    </div>
+                    <Avatar
+                      perfil={u}
+                      className="h-11 w-11 text-sm"
+                      rounded="rounded-xl"
+                      fallbackClassName="bg-amber-400 font-black text-zinc-950"
+                    />
                     <div>
                       <p className="font-bold text-white hover:text-amber-400 transition">{u.nombre}</p>
                       <p className="text-xs text-zinc-400">@{u.username} · {u._count?.juegos || 0} juegos</p>

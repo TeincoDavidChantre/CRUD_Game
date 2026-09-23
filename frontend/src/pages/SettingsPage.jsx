@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import API from '../services/api';
 import ApiKeysModal from '../components/ApiKeysModal';
+import { MONEDAS, guardarMoneda, obtenerMoneda } from '../lib/moneda';
 
 const AVATARES_PRESET = [
   { id: '1', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=PixelGamer', nombre: 'Cyber Bot' },
@@ -17,8 +18,8 @@ export default function SettingsPage() {
   const [guardando, setGuardando] = useState(false);
   const [showKeysModal, setShowKeysModal] = useState(false);
   const [keysInfo, setKeysInfo] = useState({ hasRawg: false, hasIgdb: false });
+  const [moneda, setMoneda] = useState(() => obtenerMoneda());
 
-  // Campos de formulario
   const [nombre, setNombre] = useState('');
   const [biografia, setBiografia] = useState('');
   const [avatar, setAvatar] = useState('');
@@ -63,6 +64,13 @@ export default function SettingsPage() {
     }
   }
 
+  function handleMoneda(code) {
+    const ok = guardarMoneda(code);
+    setMoneda(ok);
+    setMensajeExito(`Moneda guardada: ${ok}. Los precios se mostrarán en esta moneda.`);
+    setTimeout(() => setMensajeExito(''), 3000);
+  }
+
   return (
     <div className="mx-auto grid max-w-2xl gap-6">
       <div>
@@ -82,12 +90,10 @@ export default function SettingsPage() {
         </p>
       )}
 
-      {/* Formulario de Perfil Público */}
       {perfil && (
         <form onSubmit={handleGuardarPerfil} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 space-y-5">
           <h2 className="text-base font-bold text-white">Perfil Público</h2>
 
-          {/* Selector de Avatar */}
           <div>
             <label className="block text-xs font-semibold text-zinc-300 mb-2">Avatar del Perfil</label>
             <div className="flex items-center gap-4 mb-3">
@@ -128,7 +134,6 @@ export default function SettingsPage() {
             />
           </div>
 
-          {/* Nombre y Username */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1">Nombre</label>
@@ -151,7 +156,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Biografía */}
           <div>
             <label className="block text-xs font-semibold text-zinc-300 mb-1">Biografía</label>
             <textarea
@@ -175,7 +179,29 @@ export default function SettingsPage() {
         </form>
       )}
 
-      {/* Sección de Claves de Catálogo (BYOK) */}
+      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 text-sm text-zinc-300 space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-white">Moneda local</h2>
+          <p className="mt-1 text-xs text-zinc-400">
+            Los precios de ofertas y de la ficha se convierten desde USD a tu moneda. Se guarda solo en este navegador.
+          </p>
+        </div>
+        <label className="block text-xs font-semibold text-zinc-300">
+          Moneda de visualización
+          <select
+            value={moneda}
+            onChange={(e) => handleMoneda(e.target.value)}
+            className="mt-1.5 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-200 focus:border-amber-400 focus:outline-none"
+          >
+            {MONEDAS.map((m) => (
+              <option key={m.code} value={m.code}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 text-sm text-zinc-300 space-y-4">
         <div>
           <h2 className="text-base font-bold text-white">Catálogo Universal de Juegos (APIs)</h2>
@@ -204,7 +230,6 @@ export default function SettingsPage() {
         </button>
       </section>
 
-      {/* Modal de configuración */}
       <ApiKeysModal
         isOpen={showKeysModal}
         onClose={() => setShowKeysModal(false)}

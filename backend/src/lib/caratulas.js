@@ -1,3 +1,9 @@
+import {
+  elegirPorTituloEstricto,
+  esMatchTituloEstricto,
+  normalizarTitulo,
+} from './tituloMatch.js';
+
 const cache = new Map();
 
 const CABECERAS = {
@@ -7,7 +13,12 @@ const CABECERAS = {
 
 export function esCaptura(url) {
   const s = String(url || '');
-  return /rawg\.io/i.test(s) || /\/screenshots?\//i.test(s) || /\/header\.jpg/i.test(s) || /capsule_\d+x\d+/i.test(s);
+  // Solo capturas / headers horizontales — no bloquear media.rawg.io/media/games (fondo de ficha)
+  if (/\/screenshots?\//i.test(s)) return true;
+  if (/rawg\.io\/media\/screenshots/i.test(s)) return true;
+  if (/\/header\.jpg/i.test(s) || /capsule_\d+x\d+/i.test(s)) return true;
+  if (/gameplay/i.test(s) && /(rawg\.io|steamstatic)/i.test(s)) return true;
+  return false;
 }
 
 export function esCaratulaOficial(url) {
@@ -22,6 +33,8 @@ export function esCaratulaOficial(url) {
   if (/mzstatic\.com/i.test(s) && !/100x100|artworkUrl100/i.test(s)) return true;
   if (/t_cover_big|t_1080p|t_720p/i.test(s)) return true;
   if (/wikimedia\.org/i.test(s) && /cover|boxart|box_art|poster/i.test(s) && !/thumb\/\d+px/i.test(s)) return true;
+  // RAWG: imagen de ficha (mejor mostrar que dejar hueco vacío en inicio)
+  if (/media\.rawg\.io\/media\/(?:resize\/[^/]+\/)?games\//i.test(s)) return true;
   return false;
 }
 
@@ -38,12 +51,7 @@ export function origenPortada(url) {
 }
 
 function normalizar(texto) {
-  return String(texto || '')
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+  return normalizarTitulo(texto);
 }
 
 function urlSegura(url, permitir) {
@@ -132,36 +140,23 @@ export async function caratulaSteamCabecera(appId) {
 }
 
 async function caratulaSteamPorNombre(titulo) {
-  const qNormal = normalizar(titulo);
-  if (!qNormal) return '';
-
-  function limpiarTituloParaSteam(t) {
-    return String(t || '')
-      .normalize('NFD')
-      .replace(/\p{M}/gu, '')
-      .toLowerCase()
-      .replace(/—|-|–|:/g, ' ')
-      .replace(/\b(complete edition|game of the year|goty|definitive edition|deluxe edition|standard edition|remastered|enhanced edition|anniversary edition|special edition|director s cut|legacy edition)\b/gi, '')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
-  }
-
-  const qLimpia = limpiarTituloParaSteam(titulo);
+  if (!normalizar(titulo)) return '';
 
   try {
-    const datos = await leerJson(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(titulo)}&l=english&cc=us`);
+    const datos = await leerJson(
+      `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(titulo)}&l=english&cc=us`,
+    );
     const items = (datos?.items || []).filter((entry) => {
       if (entry.type !== 'app') return false;
       const n = (entry.name || '').toLowerCase();
-      if (n.includes('soundtrack') || n.includes('artbook') || n.includes('dlc') || n.includes('season pass') || n.includes('expansion pack')) return false;
+      if (n.includes('soundtrack') || n.includes('artbook') || n.includes('dlc') || n.includes('season pass') || n.includes('expansion pack')) {
+        return false;
+      }
       return true;
     });
 
-    const coincidencia = items.find((entry) => normalizar(entry.name) === qNormal)
-      || items.find((entry) => limpiarTituloParaSteam(entry.name) === qLimpia)
-      || items.find((entry) => limpiarTituloParaSteam(entry.name).startsWith(qLimpia))
-      || items[0];
-
+    // Strict match: jamás items[0] de la franquicia
+    const coincidencia = elegirPorTituloEstricto(items, titulo, (e) => e.name);
     if (!coincidencia?.id) return '';
     return caratulaSteam(coincidencia.id);
   } catch {
@@ -186,12 +181,16 @@ async function caratulaPlay(productId) {
 }
 
 async function caratulaNintendo(titulo) {
-  const datos = await leerJson(`https://searching.nintendo-europe.com/en/select?q=${encodeURIComponent(titulo)}&fq=type:GAME&rows=5&wt=json`);
-  const exacto = (datos?.response?.docs || []).find((doc) => normalizar(doc.title) === normalizar(titulo));
+  const datos = await leerJson(
+    `https://searching.nintendo-europe.com/en/select?q=${encodeURIComponent(titulo)}&fq=type:GAME&rows=8&wt=json`,
+  );
+  const exacto = elegirPorTituloEstricto(datos?.response?.docs || [], titulo, (doc) => doc.title);
   const url = exacto?.image_url || '';
   if (!url.startsWith('https://www.nintendo.com/')) return '';
   if (/\/03_teaser_module|default/i.test(url)) return '';
-  if (!url.includes('/05_packshots/') && !(url.includes('/migration/games_7/packshot/') && url.includes('/portrait/'))) return '';
+  if (!url.includes('/05_packshots/') && !(url.includes('/migration/games_7/packshot/') && url.includes('/portrait/'))) {
+    return '';
+  }
   return urlSegura(url, (host) => host === 'www.nintendo.com');
 }
 
@@ -228,28 +227,41 @@ async function mediaVertical(titulo) {
 
 async function caratulaWikipediaVertical(titulo) {
   if (!titulo) return '';
+  // Solo página cuyo título coincide de forma estricta (evita redirecciones a hermanos de franquicia)
   const limpia = String(titulo).replace(/\s*\(\d{4}\)$/, '').trim();
-  const directa = await mediaVertical(limpia);
-  if (directa) return directa;
-  const conVideoGame = await mediaVertical(`${limpia} (video game)`);
-  if (conVideoGame) return conVideoGame;
-  return mediaVertical(limpia.replace(/—|-|–|:/g, ' ').replace(/\s+/g, '_'));
+  const candidatos = [limpia, `${limpia} (video game)`];
+  for (const candidato of candidatos) {
+    const url = await mediaVertical(candidato);
+    if (!url) continue;
+    // media-list usa el título de página; exigir match léxico con lo pedido
+    if (esMatchTituloEstricto(limpia, candidato.replace(/\s*\(video game\)$/i, ''))) {
+      return url;
+    }
+  }
+  return '';
 }
 
 const cacheVertical = new Map();
 
 export async function buscarCaratulaVertical({ titulo, steamAppId } = {}) {
-  const clave = normalizar(titulo);
-  if (!clave) return '';
+  const clave = `${steamAppId || ''}|${normalizar(titulo)}`;
+  if (!normalizar(titulo) && !steamAppId) return '';
   if (cacheVertical.has(clave)) return cacheVertical.get(clave);
   const base = String(titulo || '').replace(/\s*\(\d{4}\)$/, '').trim();
+
+  // 1) ID Steam primero — nunca buscar por nombre si ya hay app id
+  if (steamAppId) {
+    const porId = await caratulaSteam(steamAppId);
+    if (porId) {
+      cacheVertical.set(clave, porId);
+      return porId;
+    }
+  }
+
   const portada = await primera([
-    async () => (steamAppId ? caratulaSteam(steamAppId) : ''),
-    async () => caratulaSteamPorNombre(base),
-    async () => caratulaNintendo(base),
-    async () => caratulaMicrosoftPoster(base),
-    async () => caratulaWikipediaVertical(base),
-    async () => (base !== titulo ? caratulaWikipediaVertical(titulo) : ''),
+    async () => (base ? caratulaSteamPorNombre(base) : ''),
+    async () => (base ? caratulaNintendo(base) : ''),
+    async () => (base ? caratulaWikipediaVertical(base) : ''),
   ]);
   cacheVertical.set(clave, portada);
   return portada;
@@ -264,7 +276,7 @@ export async function resolverMejorPortada({ titulo, steamAppId, tiendas = {}, u
     return urlActual;
   }
 
-  // 1. Extraer AppId de Steam si existe
+  // 1. Extraer AppId de Steam si existe — petición por ID, no por nombre
   const steamUrl = tiendas.steam || '';
   const idS = steamAppId || (steamUrl.match(/app\/(\d+)/)?.[1]);
   if (idS) {
@@ -272,14 +284,31 @@ export async function resolverMejorPortada({ titulo, steamAppId, tiendas = {}, u
     if (steamCover) return steamCover;
   }
 
-  // 2. Búsqueda automática en fuentes verticales oficiales
+  // 2. Búsqueda por nombre solo con match estricto (sin fallbacks de franquicia)
   if (titulo) {
     const vertical = await buscarCaratulaVertical({ titulo, steamAppId: idS });
     if (vertical) return vertical;
   }
 
-  // 3. Mantener carátula actual como respaldo
-  return urlActual || '';
+  // 3. IGDB cover (cuenta del proyecto) si Steam/Nintendo no aportaron
+  if (titulo) {
+    try {
+      const { metaIgdb } = await import('./fetchers/igdbFetcher.js');
+      const clientId = (process.env.TWITCH_CLIENT_ID || process.env.IGDB_CLIENT_ID || '').trim();
+      const clientSecret = (process.env.TWITCH_CLIENT_SECRET || process.env.IGDB_CLIENT_SECRET || '').trim();
+      if (clientId && clientSecret) {
+        const meta = await metaIgdb(titulo, clientId, clientSecret);
+        if (meta?.coverUrl && esPortadaVerticalOptima(meta.coverUrl)) return meta.coverUrl;
+      }
+    } catch {
+      // sin cover IGDB
+    }
+  }
+
+  // 4. Si la URL actual ya es usable (RAWG games / IGDB), conservarla
+  if (urlActual && esPortadaVerticalOptima(urlActual)) return urlActual;
+
+  return '';
 }
 
 async function primera(tareas) {

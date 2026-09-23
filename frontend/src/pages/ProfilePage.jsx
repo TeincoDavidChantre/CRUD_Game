@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import API from '../services/api';
+import Avatar from '../components/Avatar';
 import CoverTile from '../components/CoverTile';
 import FichaDialog from '../components/FichaDialog';
 import { desdeBiblioteca } from '../lib/fichas';
@@ -95,9 +96,12 @@ export default function ProfilePage() {
       <section className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/60 p-6 sm:p-8">
         <div className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-6">
           <div className="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left">
-            <div className="flex h-24 w-24 items-center justify-center rounded-2xl bg-amber-400 text-3xl font-black text-zinc-950 shadow-lg">
-              {usuario.nombre ? usuario.nombre.charAt(0).toUpperCase() : 'U'}
-            </div>
+            <Avatar
+              perfil={usuario}
+              className="h-24 w-24 text-3xl shadow-lg"
+              rounded="rounded-2xl"
+              fallbackClassName="bg-amber-400 font-black text-zinc-950"
+            />
             <div>
               <h1 className="text-2xl font-black text-white sm:text-3xl">{usuario.nombre}</h1>
               <p className="text-sm font-semibold text-amber-400">@{usuario.username}</p>

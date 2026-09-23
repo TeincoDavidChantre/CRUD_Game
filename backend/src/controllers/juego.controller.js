@@ -1,5 +1,11 @@
 import { esPortadaVerticalOptima, resolverMejorPortada } from '../lib/caratulas.js';
 import { prisma } from '../lib/prisma.js';
+import {
+  enriquecerSantuarioParaBiblioteca,
+  normalizarDetalleRespuesta,
+  santuarioVacio,
+} from '../lib/santuario.js';
+import { prepararTaxonomiaParaPrisma } from '../utils/taxonomyMapper.js';
 
 const ESTADOS = ['PENDIENTE', 'JUGANDO', 'COMPLETADO', 'ABANDONADO'];
 
@@ -15,6 +21,48 @@ function lista(valor, max) {
     .slice(0, 12)
     .join(', ')
     .slice(0, max);
+}
+
+function validarPreservacionUsuario(valor) {
+  let lista;
+  if (typeof valor === 'string') {
+    try {
+      lista = JSON.parse(valor || '[]');
+    } catch {
+      const error = new Error('preservacionUsuarioJson inválido');
+      error.status = 400;
+      throw error;
+    }
+  } else {
+    lista = valor;
+  }
+  if (!Array.isArray(lista)) {
+    const error = new Error('preservacionUsuarioJson debe ser un arreglo');
+    error.status = 400;
+    throw error;
+  }
+  const tipos = new Set(['manual', 'mapa', 'guia', 'wiki', 'oficial', 'otro']);
+  return lista.slice(0, 12).map((d, i) => {
+    const url = String(d?.url || '').trim();
+    if (!/^https?:\/\//i.test(url) || url.length > 2000) {
+      const error = new Error('Cada documento necesita una URL http(s) válida');
+      error.status = 400;
+      throw error;
+    }
+    const tipo = tipos.has(d?.tipo) ? d.tipo : 'otro';
+    const titulo = String(d?.titulo || 'Documento').trim().slice(0, 120) || 'Documento';
+    return {
+      id: String(d?.id || `usuario:${i}:${url}`).slice(0, 200),
+      tipo,
+      titulo,
+      tituloOrigen: String(d?.tituloOrigen || titulo).slice(0, 200),
+      url,
+      fuente: 'Usuario',
+      esPdf: /\.pdf($|\?)/i.test(url),
+      esImagen: /\.(jpe?g|png|webp|gif)($|\?)/i.test(url),
+      esEnlace: !/\.pdf($|\?)/i.test(url),
+    };
+  });
 }
 
 function validarCalificacion(estado, valor, obligatoria) {
@@ -95,7 +143,8 @@ export const obtenerJuegos = async (req, res) => {
             urlActual: juego.urlPortada || '',
           });
 
-          if (mejor && mejor !== juego.urlPortada) {
+          // Solo actualizar si encontramos una carátula mejor — nunca borrar la actual a null
+          if (mejor && esPortadaVerticalOptima(mejor) && mejor !== juego.urlPortada) {
             await prisma.juegoUsuario.update({
               where: { id: juego.id },
               data: { urlPortada: mejor },
@@ -116,6 +165,55 @@ export const obtenerJuegos = async (req, res) => {
   }
 };
 
+export const obtenerJuego = async (req, res) => {
+  try {
+    let juego = await prisma.juegoUsuario.findFirst({
+      where: { id: req.params.id, idUsuario: req.usuario.id },
+    });
+    if (!juego) {
+      res.status(404).json({ error: 'No está en tu biblioteca' });
+      return;
+    }
+
+    if (!esPortadaVerticalOptima(juego.urlPortada)) {
+      try {
+        const mejor = await resolverMejorPortada({
+          titulo: juego.tituloJuego,
+          urlActual: juego.urlPortada || '',
+        });
+        // Solo mejorar; no borrar portada existente si falla la resolución
+        if (mejor && esPortadaVerticalOptima(mejor) && mejor !== juego.urlPortada) {
+          juego = await prisma.juegoUsuario.update({
+            where: { id: juego.id },
+            data: { urlPortada: mejor },
+          });
+        }
+      } catch {
+        // Mantener portada actual
+      }
+    }
+
+    const forzar = String(req.query.refresh || '') === '1';
+    try {
+      const enriquecido = await enriquecerSantuarioParaBiblioteca(juego, req.headers, { forzar });
+      res.json(normalizarDetalleRespuesta(enriquecido));
+    } catch (err) {
+      console.warn('Santuario falló; devolviendo ficha base:', err.message);
+      res.json(normalizarDetalleRespuesta({
+        ...juego,
+        santuario: {
+          ...santuarioVacio(),
+          metacritic: juego.metacritic ?? null,
+          desarrollador: juego.desarrollador || '',
+        },
+      }));
+    }
+  } catch (error) {
+    console.error('Error en GET /api/juegos/:id:', error);
+    res.status(500).json({ error: 'Error al obtener el juego' });
+  }
+};
+
 export const crearJuego = async (req, res) => {
   try {
     const tituloJuego = texto(req.body?.tituloJuego, 160);
@@ -127,17 +225,27 @@ export const crearJuego = async (req, res) => {
     const calificacion = validarCalificacion(estado, req.body?.calificacion, true);
 
     let urlPortada = portadaPermitida(req.body?.urlPortada) || null;
+    const urlEntrada = urlPortada;
     if (!esPortadaVerticalOptima(urlPortada)) {
       try {
         const mejor = await resolverMejorPortada({
           titulo: tituloJuego,
           urlActual: urlPortada || '',
         });
-        if (mejor) urlPortada = mejor;
+        if (mejor && esPortadaVerticalOptima(mejor)) {
+          urlPortada = mejor;
+        } else if (urlEntrada && esPortadaVerticalOptima(urlEntrada)) {
+          urlPortada = urlEntrada;
+        }
+        // Si no hay mejor vertical, conservar la URL de entrada si no es captura
       } catch {
-        // En caso de fallo de red puntual, conservar portada previa
+        // conservar urlEntrada
       }
     }
+
+    const tax = prepararTaxonomiaParaPrisma(
+      [req.body?.generos, req.body?.tematicas, req.body?.etiquetas].filter(Boolean),
+    );
 
     const nuevoJuego = await prisma.juegoUsuario.create({
       data: {
@@ -147,7 +255,8 @@ export const crearJuego = async (req, res) => {
         descripcion: texto(req.body?.descripcion, 2000),
         plataformas: lista(req.body?.plataformas, 200),
         sistemas: lista(req.body?.sistemas, 200),
-        generos: lista(req.body?.generos, 200),
+        generos: tax.generos,
+        tematicas: tax.tematicas,
         metacritic: notaMetacritic(req.body?.metacritic),
         desarrollador: texto(req.body?.desarrollador, 160),
         etiquetas: lista(req.body?.etiquetas, 200),
@@ -156,7 +265,13 @@ export const crearJuego = async (req, res) => {
         estado,
       },
     });
-    res.status(201).json(nuevoJuego);
+    try {
+      const enriquecido = await enriquecerSantuarioParaBiblioteca(nuevoJuego, req.headers);
+      res.status(201).json(normalizarDetalleRespuesta(enriquecido));
+    } catch (err) {
+      console.warn('Enriquecido al crear falló; se guarda el juego:', err.message);
+      res.status(201).json(nuevoJuego);
+    }
   } catch (error) {
     if (error.status === 400) {
       res.status(400).json({ error: error.message });
@@ -191,7 +306,22 @@ export const actualizarJuego = async (req, res) => {
     if (req.body?.plataformas != null) data.plataformas = lista(req.body.plataformas, 200);
     if (req.body?.sistemas != null) data.sistemas = lista(req.body.sistemas, 200);
     if (req.body?.etiquetas != null) data.etiquetas = lista(req.body.etiquetas, 200);
-    if (req.body?.comentario != null) data.comentario = texto(req.body.comentario, 1000);
+    if (req.body?.comentario != null) data.comentario = texto(req.body.comentario, 8000);
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'preservacionUsuarioJson')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'preservacionUsuario')) {
+      const docs = validarPreservacionUsuario(
+        req.body.preservacionUsuarioJson ?? req.body.preservacionUsuario,
+      );
+      data.preservacionUsuarioJson = JSON.stringify(docs);
+    }
+    if (req.body?.generos != null || req.body?.tematicas != null) {
+      const tax = prepararTaxonomiaParaPrisma([
+        req.body?.generos ?? actual.generos,
+        req.body?.tematicas ?? actual.tematicas,
+      ]);
+      data.generos = tax.generos;
+      data.tematicas = tax.tematicas;
+    }
 
     const juegoActualizado = await prisma.juegoUsuario.update({
       where: { id: actual.id },

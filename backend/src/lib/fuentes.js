@@ -1,4 +1,6 @@
 import { buscarCaratulaVertical, caratulaSteam } from './caratulas.js';
+import { fetchWikipediaVideojuego, sanitizarSinopsis } from '../utils/synopsisFetcher.js';
+import { crearTtlCache } from './ttlCache.js';
 
 const CABECERAS = {
   'User-Agent': 'GameTracker/1.0 (catalogo local de videojuegos)',
@@ -6,6 +8,9 @@ const CABECERAS = {
 };
 
 const cacheFichas = new Map();
+/** Resultados de búsqueda (Steam/Nintendo/…) — evita repetir la misma query en sugerencias. */
+const cacheBusqueda = crearTtlCache({ max: 300 });
+const TTL_BUSQUEDA_MS = 6 * 60 * 60 * 1000; // 6 h
 const ORDEN_DONDE = [
   'PS5', 'PS4', 'PS3', 'PS Vita', 'PSP', 'PS2',
   'Xbox Series X|S', 'Xbox One', 'Xbox 360', 'Xbox',
@@ -98,11 +103,20 @@ function lanzamientoElegido(actual, extra) {
 }
 
 function describir(actual, extra) {
-  const rango = (origen) => (origen === 'steam' ? 3 : origen === 'wiki' ? 2 : 1);
-  if (rango(actual.origenDescripcion) !== rango(extra.origenDescripcion)) {
-    return rango(actual.origenDescripcion) > rango(extra.origenDescripcion) ? actual : extra;
+  const limpia = (ficha) => ({
+    ...ficha,
+    descripcion: sanitizarSinopsis(ficha.descripcion || '', { exigirContextoLudico: ficha.origenDescripcion === 'wiki' }),
+  });
+  const a = limpia(actual);
+  const e = limpia(extra);
+  const rango = (origen) => (origen === 'steam' ? 3 : origen === 'wiki' ? 1 : 2);
+  // Preferir tienda; Wikipedia solo si no hay otra
+  if (a.descripcion && !e.descripcion) return a;
+  if (e.descripcion && !a.descripcion) return e;
+  if (rango(a.origenDescripcion) !== rango(e.origenDescripcion)) {
+    return rango(a.origenDescripcion) > rango(e.origenDescripcion) ? a : e;
   }
-  return (extra.descripcion || '').length > (actual.descripcion || '').length ? extra : actual;
+  return (e.descripcion || '').length > (a.descripcion || '').length ? e : a;
 }
 
 function desarrolladorElegido(actual, extra) {
@@ -603,8 +617,10 @@ async function buscarWikipedia(q, tope) {
     const resumen = await leerJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo)}`);
     if (!resumen || resumen.type === 'disambiguation') return null;
     const fichaCorta = resumen.description || '';
-    if (!/\bgame\b/i.test(fichaCorta) || /character|film|movie|series|person|company|soundtrack|album|list of/i.test(fichaCorta)) return null;
+    if (!/\bgame\b/i.test(fichaCorta) || /character|film|movie|series|person|company|soundtrack|album|list of|band|singer|musician/i.test(fichaCorta)) return null;
     const texto = `${fichaCorta} ${resumen.extract || ''}`;
+    const descLimpia = sanitizarSinopsis(resumen.extract || '', { exigirContextoLudico: true });
+    if (!descLimpia) return null;
     const thumb = resumen.thumbnail || {};
     const portada = ampliarPortada(thumb.source || '');
     if (!/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(portada)) return null;
@@ -617,7 +633,7 @@ async function buscarWikipedia(q, tope) {
       titulo: (resumen.title || titulo).replace(/ \(video game\)$/i, ''),
       portada,
       portadaVertical: cajaVertical,
-      descripcion: textoPlano(resumen.extract).slice(0, 1200),
+      descripcion: descLimpia.slice(0, 1200),
       origenDescripcion: 'wiki',
       anioFuente: 'wiki',
       donde,
@@ -691,6 +707,11 @@ const FUENTES = {
 export async function buscarFichas(q, limite, fuente, opciones = {}) {
   const tope = limite == null ? 40 : Math.min(Number(limite) || 8, 30);
   const porEtiqueta = Boolean(opciones.porEtiqueta);
+  const rapido = Boolean(opciones.rapido);
+  const claveCache = `bf:${fuente || 'multi'}:${porEtiqueta ? 'e' : 't'}:${rapido ? 'r' : 'f'}:${normalizar(q)}:${tope}`;
+  const hit = cacheBusqueda.get(claveCache);
+  if (hit) return limite == null ? hit : hit.slice(0, limite);
+
   const tareas = FUENTES[fuente]
     ? [FUENTES[fuente]]
     : limite == null
@@ -709,19 +730,21 @@ export async function buscarFichas(q, limite, fuente, opciones = {}) {
       return [];
     }
   }));
-  const completas = await completarPortadas(agrupar(listas.flat()));
+  // Modo rápido (inicio/sugerencias): no pedir carátulas verticales extra
+  const agrupadas = agrupar(listas.flat());
+  const completas = rapido
+    ? agrupadas.filter((ficha) => ficha.portada)
+    : await completarPortadas(agrupadas);
   const fichas = completas
     .filter((ficha) => porEtiqueta || cercania(ficha.titulo, q) <= 2)
     .sort((a, b) => (porEtiqueta ? 0 : puntajeCercania(b.titulo, q, b.tiendas) - puntajeCercania(a.titulo, q, a.tiendas)) || a.orden - b.orden || a.titulo.localeCompare(b.titulo))
     .map(guardar);
+  cacheBusqueda.set(claveCache, fichas, TTL_BUSQUEDA_MS);
   return limite == null ? fichas : fichas.slice(0, limite);
 }
 
 async function resumenWikipedia(titulo) {
-  const datos = await leerJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo.replace(/ /g, '_'))}`);
-  const extracto = textoPlano(datos?.extract);
-  if (!extracto || datos?.type === 'disambiguation') return '';
-  return extracto.slice(0, 1200);
+  return fetchWikipediaVideojuego(titulo);
 }
 
 async function detalleSteam(appId) {
@@ -738,7 +761,7 @@ async function detalleSteam(appId) {
     titulo: juego.name,
     portada,
     portadaVertical: Boolean(portada),
-    descripcion: textoPlano(juego.short_description).slice(0, 1200),
+    descripcion: sanitizarSinopsis(juego.short_description || '', { exigirContextoLudico: false }).slice(0, 1200),
     origenDescripcion: 'steam',
     desarrolladorFuente: 'steam',
     donde: ['Steam'],
@@ -762,12 +785,19 @@ async function enriquecer(ficha) {
     const steam = await detalleSteam(actual.steamAppId).catch(() => null);
     if (steam) actual = unir(actual, steam);
   }
-  if (!actual.descripcion) {
-    const texto = await resumenWikipedia(actual.titulo).catch(() => '');
-    if (texto) {
-      actual.descripcion = texto;
-      if (actual.origenDescripcion !== 'steam') actual.origenDescripcion = 'wiki';
+  if (!actual.descripcion || !sanitizarSinopsis(actual.descripcion, { exigirContextoLudico: false })) {
+    // Prioridad: Steam ya se unió arriba; Wikipedia solo si sigue vacío
+    if (!sanitizarSinopsis(actual.descripcion || '', { exigirContextoLudico: false })) {
+      const texto = await resumenWikipedia(actual.titulo).catch(() => '');
+      if (texto) {
+        actual.descripcion = texto;
+        actual.origenDescripcion = 'wiki';
+      } else {
+        actual.descripcion = '';
+      }
     }
+  } else {
+    actual.descripcion = sanitizarSinopsis(actual.descripcion, { exigirContextoLudico: false });
   }
   if (!actual.portadaVertical) {
     const vertical = await buscarCaratulaVertical({ titulo: actual.titulo, steamAppId: actual.steamAppId }).catch(() => '');
@@ -792,16 +822,28 @@ export async function detalleFicha(id) {
   }
   if (id.startsWith('wiki:')) {
     const titulo = Buffer.from(id.slice(5), 'base64url').toString('utf8');
+    const extracto = await fetchWikipediaVideojuego(titulo.replace(/ \(video game\)$/i, '')).catch(() => '');
+    if (!extracto) return null;
     const resumen = await leerJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo)}`).catch(() => null);
-    if (!resumen?.title || !/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(resumen.thumbnail?.source || '')) return null;
-    const texto = `${resumen.description || ''} ${resumen.extract || ''}`;
+    if (!resumen?.title || !/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(resumen.thumbnail?.source || '')) {
+      // Sin thumb válido: aún devolver ficha con sinopsis de juego
+      const fichaSinPortada = fichaDe({
+        id,
+        titulo: titulo.replace(/ \(video game\)$/i, ''),
+        descripcion: extracto.slice(0, 1200),
+        origenDescripcion: 'wiki',
+        anioFuente: 'wiki',
+      });
+      return fichaSinPortada ? enriquecer(fichaSinPortada) : null;
+    }
+    const texto = `${resumen.description || ''} ${extracto}`;
     const { donde, sistemas } = clasificarTexto(texto);
     const ficha = fichaDe({
       id,
       titulo: resumen.title.replace(/ \(video game\)$/i, ''),
       portada: ampliarPortada(resumen.thumbnail.source),
       portadaVertical: Number(resumen.thumbnail.height) > Number(resumen.thumbnail.width) * 1.05 && !/screenshot|gameplay|logo|icon|banner/i.test(resumen.thumbnail.source),
-      descripcion: textoPlano(resumen.extract).slice(0, 1200),
+      descripcion: extracto.slice(0, 1200),
       origenDescripcion: 'wiki',
       anioFuente: 'wiki',
       donde,

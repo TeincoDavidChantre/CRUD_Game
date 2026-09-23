@@ -1,6 +1,17 @@
 import { prisma } from './prisma.js';
 import { buscarFichas, detalleFicha } from './fuentes.js';
 import { resolverMejorPortada, esPortadaVerticalOptima, esCaptura } from './caratulas.js';
+import { metaSteam, steamAppIdDe } from './fetchers/steamFetcher.js';
+import { metaIgdb } from './fetchers/igdbFetcher.js';
+import { mapearGeneroCanonico, prepararTaxonomiaParaPrisma } from '../utils/taxonomyMapper.js';
+import {
+  descripcionWikipediaEspanol,
+  resolverSinopsis,
+  sanitizarSinopsis,
+} from '../utils/synopsisFetcher.js';
+import { memoizarAsync } from './ttlCache.js';
+
+const twitchTokens = new Map();
 
 function tituloRelacionado(titulo, consulta) {
   const limpia = (texto) => String(texto || '')
@@ -35,19 +46,33 @@ async function enriquecerConMejorPortada(juegos = []) {
       try {
         const mejor = await resolverMejorPortada({
           titulo: juego.titulo,
+          steamAppId: steamAppIdDe(juego) || undefined,
           tiendas: juego.enlacesTienda || {},
           urlActual: actual,
         });
         if (mejor && esPortadaVerticalOptima(mejor)) {
-          return { ...juego, urlPortada: mejor, portada: mejor, portadaVertical: true, banner: esCaptura(actual) ? null : actual };
+          return {
+            ...juego,
+            urlPortada: mejor,
+            portada: mejor,
+            portadaVertical: true,
+            banner: esCaptura(actual) ? null : actual,
+          };
         }
       } catch {
-        // Sin carátula oficial vertical.
+        // Sin carátula vertical mejor.
+      }
+      // No borrar la imagen de RAWG/IGDB: mejor mostrar ficha que dejar el inicio vacío
+      if (actual && !esCaptura(actual) && esPortadaVerticalOptima(actual)) {
+        return { ...juego, urlPortada: actual, portada: actual, portadaVertical: true };
+      }
+      if (actual && !esCaptura(actual)) {
+        return { ...juego, urlPortada: actual, portada: actual, portadaVertical: false };
       }
       return { ...juego, urlPortada: null, portada: null, portadaVertical: false };
     }),
   );
-  return enriquecidos.filter((juego) => juego.urlPortada && esPortadaVerticalOptima(juego.urlPortada));
+  return enriquecidos.filter((juego) => juego.urlPortada && (esPortadaVerticalOptima(juego.urlPortada) || !esCaptura(juego.urlPortada)));
 }
 
 async function obtenerTokenTwitch(clientId, clientSecret) {
@@ -96,78 +121,68 @@ function parsearTiendasRawg(stores) {
 // Helper para extraer credenciales prioritarias (cabeceras del usuario > servidor)
 function obtenerCredenciales(headers = {}) {
   const rawgKey = headers['x-rawg-key'] || process.env.RAWG_API_KEY || null;
-  const igdbClientId = headers['x-igdb-client-id'] || process.env.TWITCH_CLIENT_ID || null;
-  const igdbClientSecret = headers['x-igdb-client-secret'] || process.env.TWITCH_CLIENT_SECRET || null;
-  return { rawgKey, igdbClientId, igdbClientSecret };
+  const igdbClientId =
+    headers['x-igdb-client-id']
+    || process.env.TWITCH_CLIENT_ID
+    || process.env.IGDB_CLIENT_ID
+    || null;
+  const igdbClientSecret =
+    headers['x-igdb-client-secret']
+    || process.env.TWITCH_CLIENT_SECRET
+    || process.env.IGDB_CLIENT_SECRET
+    || null;
+  return {
+    rawgKey: rawgKey ? String(rawgKey).trim() : null,
+    igdbClientId: igdbClientId ? String(igdbClientId).trim() : null,
+    igdbClientSecret: igdbClientSecret ? String(igdbClientSecret).trim() : null,
+  };
 }
 
-// Diccionario de traducción de géneros inglés -> español
-const DICCIONARIO_GENEROS = {
-  action: 'Acción',
-  adventure: 'Aventura',
-  shooter: 'Disparos',
-  'role-playing-games-rpg': 'Rol (RPG)',
-  rpg: 'Rol (RPG)',
-  'role-playing': 'Rol (RPG)',
-  indie: 'Indie',
-  strategy: 'Estrategia',
-  casual: 'Casual',
-  simulation: 'Simulación',
-  arcade: 'Arcade',
-  puzzle: 'Puzles',
-  platformer: 'Plataformas',
-  racing: 'Carreras',
-  sports: 'Deportes',
-  fighting: 'Lucha',
-  family: 'Familiar',
-  'board-games': 'Juegos de mesa',
-  card: 'Cartas',
-  educational: 'Educativo',
-  'massively-multiplayer': 'Multijugador masivo',
-};
-
+/** @deprecated Usa prepararTaxonomiaParaPrisma / mapearGeneroCanonico */
 export function traducirGenero(genero) {
-  if (!genero) return '';
-  const clave = String(genero).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return DICCIONARIO_GENEROS[clave] || genero;
+  return mapearGeneroCanonico(genero) || '';
 }
 
-// Consulta de sinopsis oficial en español mediante Wikipedia ES
-export async function descripcionWikipediaEspanol(titulo) {
-  if (!titulo) return '';
-  const sinAnio = String(titulo).replace(/\s*\(\d{4}\)$/, '').trim();
-  const limpiar = (t) => String(t || '').replace(/—|-|–|:/g, ' ').replace(/\b(complete edition|game of the year|goty|definitive edition|remastered|deluxe edition)\b/gi, '').replace(/\s+/g, '_').trim();
-  const paginas = [
-    encodeURIComponent(String(sinAnio).replace(/ /g, '_')),
-    encodeURIComponent(`${limpiar(sinAnio)}_(videojuego)`),
-    encodeURIComponent(limpiar(sinAnio)),
-    encodeURIComponent(String(titulo).replace(/ /g, '_')),
+function taxonomiaDesdeFicha(ficha) {
+  const crudos = [
+    ...(Array.isArray(ficha.generos) ? ficha.generos : String(ficha.generos || '').split(',')),
+    ...(Array.isArray(ficha.tematicas) ? ficha.tematicas : String(ficha.tematicas || '').split(',')),
+    ...(Array.isArray(ficha.tags) ? ficha.tags : []),
   ];
-
-  for (const pag of paginas) {
-    try {
-      const resp = await fetch(`https://es.wikipedia.org/api/rest_v1/page/summary/${pag}`, {
-        headers: { 'User-Agent': 'GameTracker/1.0 (catalogo-videojuegos; personal)' },
-        signal: AbortSignal.timeout(4000),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.extract && data.extract.length > 40 && data.type !== 'disambiguation') {
-          return data.extract;
-        }
-      }
-    } catch {
-      // Probar siguiente
-    }
-  }
-  return '';
+  return prepararTaxonomiaParaPrisma(crudos);
 }
+
+function fichaDesdeIgdb(g) {
+  const portada = g.cover?.url ? `https:${g.cover.url.replace('t_thumb', 't_cover_big')}` : null;
+  const anio = g.first_release_date ? new Date(g.first_release_date * 1000).getFullYear() : null;
+  const tax = prepararTaxonomiaParaPrisma((g.genres || []).map((gen) => gen.name));
+  return {
+    id: `igdb:${g.id}`,
+    titulo: g.name,
+    slug: g.slug,
+    urlPortada: portada,
+    descripcion: sanitizarSinopsis(g.summary || '', { exigirContextoLudico: false }),
+    plataformas: (g.platforms || []).map((p) => p.name).join(', '),
+    generos: tax.generos,
+    tematicas: tax.tematicas,
+    metacritic: g.total_rating ? Math.round(g.total_rating) : null,
+    anoLanzamiento: anio,
+    enlacesTienda: {},
+    fuente: 'igdb',
+  };
+}
+
+/** @deprecated Preferir fetchWikipediaVideojuego / resolverSinopsis desde synopsisFetcher. */
+export { descripcionWikipediaEspanol };
 
 // Mapear resultado de RAWG a formato unificado
 function mapearJuegoRawg(game) {
   const anio = game.released ? new Date(game.released).getFullYear() : null;
   const plataformas = (game.platforms || []).map((p) => p.platform?.name).filter(Boolean);
-  const generos = (game.genres || []).map((g) => traducirGenero(g.name)).filter(Boolean);
+  const tax = prepararTaxonomiaParaPrisma([
+    ...(game.genres || []).map((g) => g.name),
+    ...(game.tags || []).map((t) => t.name).slice(0, 12),
+  ]);
   const desarrollador = (game.developers || []).map((d) => d.name).join(', ') || '';
 
   return {
@@ -175,10 +190,11 @@ function mapearJuegoRawg(game) {
     titulo: game.name,
     slug: game.slug,
     urlPortada: game.background_image || null,
-    descripcion: game.description_raw || game.description || '',
+    descripcion: sanitizarSinopsis(game.description_raw || game.description || '', { exigirContextoLudico: false }),
     plataformas: plataformas.join(', '),
     sistemas: plataformas.slice(0, 5).join(', '),
-    generos: generos.join(', '),
+    generos: tax.generos,
+    tematicas: tax.tematicas,
     metacritic: game.metacritic || null,
     desarrollador,
     anoLanzamiento: anio,
@@ -191,20 +207,44 @@ function mapearJuegoRawg(game) {
 export async function cachearJuegoEnBD(ficha) {
   if (!ficha || !ficha.id || !ficha.titulo) return ficha;
   try {
+    const tax = taxonomiaDesdeFicha(ficha);
     const data = {
       externalId: ficha.id,
       slug: ficha.slug || null,
       titulo: ficha.titulo,
-      descripcion: ficha.descripcion || '',
+      descripcion: sanitizarSinopsis(ficha.descripcion || '', { exigirContextoLudico: false }),
       urlPortada: ficha.urlPortada || null,
       plataformas: Array.isArray(ficha.plataformas) ? ficha.plataformas.join(', ') : String(ficha.plataformas || ''),
       sistemas: Array.isArray(ficha.sistemas) ? ficha.sistemas.join(', ') : String(ficha.sistemas || ''),
-      generos: Array.isArray(ficha.generos) ? ficha.generos.join(', ') : String(ficha.generos || ''),
+      generos: tax.generos,
+      tematicas: tax.tematicas,
       metacritic: ficha.metacritic ? Number(ficha.metacritic) : null,
       desarrollador: ficha.desarrollador || '',
       anoLanzamiento: ficha.anoLanzamiento ? Number(ficha.anoLanzamiento) : null,
       enlacesTienda: JSON.stringify(ficha.enlacesTienda || {}),
+      igdbRating: Number.isInteger(Number(ficha.igdbRating)) ? Number(ficha.igdbRating) : null,
+      jugadores: ficha.jugadores || null,
+      requiereInternet: ficha.requiereInternet === true ? true : null,
+      metaEnriquecida: Boolean(ficha.metaEnriquecida),
+      editor: ficha.editor || undefined,
+      logoUrl: ficha.logoUrl || undefined,
+      bannerUrl: ficha.bannerUrl || undefined,
+      hltbMain: ficha.hltbMain != null ? Number(ficha.hltbMain) : undefined,
+      hltbCompletionist: ficha.hltbCompletionist != null ? Number(ficha.hltbCompletionist) : undefined,
+      manualUrl: ficha.manualUrl || undefined,
+      archiveIdentifier: ficha.archiveIdentifier || undefined,
+      openCriticScore: Number.isInteger(Number(ficha.openCriticScore)) ? Number(ficha.openCriticScore) : undefined,
+      openCriticRecommend: Number.isInteger(Number(ficha.openCriticRecommend)) ? Number(ficha.openCriticRecommend) : undefined,
+      openCriticTier: ficha.openCriticTier || undefined,
+      trailerYoutubeId: ficha.trailerYoutubeId || undefined,
+      screenshotsJson: Array.isArray(ficha.screenshots)
+        ? JSON.stringify(ficha.screenshots)
+        : (ficha.screenshotsJson || undefined),
     };
+    // Quitar undefined para no pisar caché Santuario con vacíos
+    Object.keys(data).forEach((k) => {
+      if (data[k] === undefined) delete data[k];
+    });
 
     const guardado = await prisma.juego.upsert({
       where: { externalId: ficha.id },
@@ -214,6 +254,8 @@ export async function cachearJuegoEnBD(ficha) {
 
     return {
       ...ficha,
+      generos: tax.generos,
+      tematicas: tax.tematicas,
       dbId: guardado.id,
     };
   } catch (err) {
@@ -222,39 +264,19 @@ export async function cachearJuegoEnBD(ficha) {
   }
 }
 
-// 1. OBTENER TENDENCIAS / JUEGOS MÁS POPULARES
-export async function obtenerTendenciasCatalogo(headers = {}) {
+const TTL_TENDENCIAS_MS = 2 * 60 * 60 * 1000; // 2 h — compartido entre usuarios
+
+async function obtenerTendenciasCatalogoSinCache(headers = {}) {
   const { rawgKey, igdbClientId, igdbClientSecret } = obtenerCredenciales(headers);
 
-  // A) Si hay RAWG Key: consultar lo más jugado del año actual y pasado
-  if (rawgKey) {
-    try {
-      const hoy = new Date();
-      const anioActual = hoy.getFullYear();
-      const anioAnterior = anioActual - 1;
-      const url = `https://api.rawg.io/api/games?key=${rawgKey}&dates=${anioAnterior}-01-01,${anioActual}-12-31&ordering=-added&page_size=30`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (resp.ok) {
-        const data = await resp.json();
-        const listaCruda = (data.results || []).map(mapearJuegoRawg);
-        const lista = await enriquecerConMejorPortada(listaCruda);
-        // Cachear en paralelo en PostgreSQL
-        Promise.all(lista.map(cachearJuegoEnBD)).catch(() => {});
-        return lista;
-      }
-    } catch (e) {
-      console.warn('Fallo al obtener tendencias de RAWG:', e.message);
-    }
-  }
-
-  // B) Si hay IGDB: consultar los más valorados/populares
+  // A) IGDB primero: covers verticales t_cover_big (mejor para el carrusel del inicio)
   if (igdbClientId && igdbClientSecret) {
     const token = await obtenerTokenTwitch(igdbClientId, igdbClientSecret);
     if (token) {
       try {
         const body = `
           fields name, slug, cover.url, summary, platforms.name, genres.name, total_rating, first_release_date, websites.url, websites.category;
-          where total_rating_count > 50 & first_release_date > 1640995200;
+          where total_rating_count > 50 & first_release_date > 1640995200 & cover != null;
           sort total_rating_count desc;
           limit 30;
         `;
@@ -270,25 +292,13 @@ export async function obtenerTendenciasCatalogo(headers = {}) {
         });
         if (resp.ok) {
           const games = await resp.json();
-          const lista = games.map((g) => {
-            const portada = g.cover?.url ? `https:${g.cover.url.replace('t_thumb', 't_cover_big')}` : null;
-            const anio = g.first_release_date ? new Date(g.first_release_date * 1000).getFullYear() : null;
-            return {
-              id: `igdb:${g.id}`,
-              titulo: g.name,
-              slug: g.slug,
-              urlPortada: portada,
-              descripcion: g.summary || '',
-              plataformas: (g.platforms || []).map((p) => p.name).join(', '),
-              generos: (g.genres || []).map((gen) => gen.name).join(', '),
-              metacritic: g.total_rating ? Math.round(g.total_rating) : null,
-              anoLanzamiento: anio,
-              enlacesTienda: {},
-              fuente: 'igdb',
-            };
-          });
+          const lista = games.map(fichaDesdeIgdb).map((f) => ({
+            ...f,
+            portada: f.urlPortada,
+            portadaVertical: Boolean(f.urlPortada),
+          }));
           Promise.all(lista.map(cachearJuegoEnBD)).catch(() => {});
-          return lista;
+          if (lista.length) return lista;
         }
       } catch (e) {
         console.warn('Fallo al obtener tendencias de IGDB:', e.message);
@@ -296,54 +306,85 @@ export async function obtenerTendenciasCatalogo(headers = {}) {
     }
   }
 
-  // C/D) Sin claves: rotar semillas conocidas según la hora (cambia a lo largo del día)
+  // B) RAWG: populares recientes (fallback; 1 request, sin enriquecer covers una a una)
+  if (rawgKey) {
+    try {
+      const hoy = new Date();
+      const anioActual = hoy.getFullYear();
+      const anioAnterior = anioActual - 1;
+      const url = `https://api.rawg.io/api/games?key=${rawgKey}&dates=${anioAnterior}-01-01,${anioActual}-12-31&ordering=-added&page_size=30`;
+      const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) {
+        const data = await resp.json();
+        const lista = (data.results || []).map(mapearJuegoRawg).map((f) => ({
+          ...f,
+          portada: f.urlPortada || f.portada,
+          portadaVertical: Boolean(f.urlPortada || f.portada),
+        }));
+        Promise.all(lista.map(cachearJuegoEnBD)).catch(() => {});
+        if (lista.length) return lista;
+      }
+    } catch (e) {
+      console.warn('Fallo al obtener tendencias de RAWG:', e.message);
+    }
+  }
+
+  // C) Sin claves: pocas búsquedas Steam en paralelo (rápido), no 18 en serie
   const banco = [
     'Elden Ring', 'Hades', 'Celeste', "Baldur's Gate 3", 'Stardew Valley', 'Hollow Knight',
-    'Disco Elysium', 'Outer Wilds', 'Hades II', 'Slay the Spire', 'Dead Cells', 'Ori and the Blind Forest',
-    'Cuphead', 'Undertale', 'Persona 5', 'The Witcher 3', 'Red Dead Redemption 2', 'God of War',
-    'It Takes Two', 'Hades', 'Sekiro', 'Monster Hunter Wilds', 'Black Myth Wukong', 'Palworld',
-    'Terraria', 'Risk of Rain 2', 'Blasphemous', 'Katana ZERO', 'Dave the Diver', 'Balatro',
-    'Clair Obscur', 'Silksong', 'Metroid Dread', 'Zelda Tears of the Kingdom', 'Animal Crossing',
+    'Disco Elysium', 'Outer Wilds', 'Dead Cells', 'Balatro', 'Silksong', 'Persona 5',
   ];
   const offset = Math.floor(Date.now() / (1000 * 60 * 30)) % banco.length;
-  const semillasTendencia = [...banco.slice(offset), ...banco.slice(0, offset)].slice(0, 18);
+  const semillasTendencia = [...banco.slice(offset), ...banco.slice(0, offset)].slice(0, 6);
+  const lotes = await Promise.all(
+    semillasTendencia.map(async (q) => {
+      try {
+        return (await buscarFichas(q, 8, 'steam', { rapido: true }))
+          .filter((f) => conPortadaOficial(f) && tituloRelacionado(f.titulo, q))
+          .slice(0, 3);
+      } catch {
+        return [];
+      }
+    }),
+  );
   const salida = [];
   const vistos = new Set();
-  for (const q of semillasTendencia) {
+  for (const ficha of lotes.flat()) {
+    const clave = String(ficha.titulo || '').toLowerCase().trim();
+    if (!clave || vistos.has(clave)) continue;
+    vistos.add(clave);
+    salida.push({ ...ficha, urlPortada: ficha.portada, portadaVertical: true, fuente: 'catalogo' });
+    if (salida.length >= 28) break;
+  }
+  if (salida.length < 20) {
     try {
-      const fichas = (await buscarFichas(q, null, 'steam')).filter((f) => conPortadaOficial(f) && tituloRelacionado(f.titulo, q));
-      for (const ficha of fichas.slice(0, 3)) {
+      const extra = await buscarFichas('indie', 16, 'steam', { porEtiqueta: true, rapido: true });
+      for (const ficha of extra) {
+        if (!conPortadaOficial(ficha)) continue;
         const clave = String(ficha.titulo || '').toLowerCase().trim();
         if (!clave || vistos.has(clave)) continue;
         vistos.add(clave);
         salida.push({ ...ficha, urlPortada: ficha.portada, portadaVertical: true, fuente: 'catalogo' });
+        if (salida.length >= 28) break;
       }
     } catch {
-      // Semilla sin resultados
-    }
-    if (salida.length >= 32) break;
-  }
-  // Relleno con topsellers Steam por tag si aún faltan
-  if (salida.length < 28) {
-    for (const tag of ['indie', 'action', 'adventure', 'rpg']) {
-      try {
-        const extra = await buscarFichas(tag, 12, 'steam', { porEtiqueta: true });
-        for (const ficha of extra) {
-          if (!conPortadaOficial(ficha)) continue;
-          const clave = String(ficha.titulo || '').toLowerCase().trim();
-          if (!clave || vistos.has(clave)) continue;
-          vistos.add(clave);
-          salida.push({ ...ficha, urlPortada: ficha.portada, portadaVertical: true, fuente: 'catalogo' });
-          if (salida.length >= 32) break;
-        }
-      } catch {
-        // tag sin resultados
-      }
-      if (salida.length >= 28) break;
+      // ok
     }
   }
   return salida;
 }
+
+// 1. OBTENER TENDENCIAS / JUEGOS MÁS POPULARES (caché global 2 h)
+export const obtenerTendenciasCatalogo = memoizarAsync(obtenerTendenciasCatalogoSinCache, {
+  ttlMs: TTL_TENDENCIAS_MS,
+  keyFn: (headers = {}) => {
+    const { rawgKey, igdbClientId } = obtenerCredenciales(headers);
+    // Misma caché si hay IGDB; distinta si solo RAWG o sin keys
+    if (igdbClientId) return 'tendencias:igdb';
+    if (rawgKey) return 'tendencias:rawg';
+    return 'tendencias:steam';
+  },
+});
 
 // 2. BUSCAR JUEGOS
 export async function buscarJuegosCatalogo(query, headers = {}, limite = 12) {
@@ -389,22 +430,7 @@ export async function buscarJuegosCatalogo(query, headers = {}, limite = 12) {
         });
         if (resp.ok) {
           const games = await resp.json();
-          const lista = games.map((g) => {
-            const portada = g.cover?.url ? `https:${g.cover.url.replace('t_thumb', 't_cover_big')}` : null;
-            return {
-              id: `igdb:${g.id}`,
-              titulo: g.name,
-              slug: g.slug,
-              urlPortada: portada,
-              descripcion: g.summary || '',
-              plataformas: (g.platforms || []).map((p) => p.name).join(', '),
-              generos: (g.genres || []).map((gen) => gen.name).join(', '),
-              metacritic: g.total_rating ? Math.round(g.total_rating) : null,
-              anoLanzamiento: g.first_release_date ? new Date(g.first_release_date * 1000).getFullYear() : null,
-              enlacesTienda: {},
-              fuente: 'igdb',
-            };
-          });
+          const lista = games.map(fichaDesdeIgdb);
           Promise.all(lista.map(cachearJuegoEnBD)).catch(() => {});
           return lista;
         }
@@ -432,6 +458,7 @@ export async function buscarJuegosCatalogo(query, headers = {}, limite = 12) {
       plataformas: j.plataformas,
       sistemas: j.sistemas,
       generos: j.generos,
+      tematicas: j.tematicas || '',
       metacritic: j.metacritic,
       desarrollador: j.desarrollador,
       anoLanzamiento: j.anoLanzamiento,
@@ -442,6 +469,55 @@ export async function buscarJuegosCatalogo(query, headers = {}, limite = 12) {
 
   // D) Fallback a tiendas públicas tradicionales
   return buscarFichas(q, limite);
+}
+
+function unirMeta(steam, igdb) {
+  const jugadores = steam?.jugadores || igdb?.jugadores || null;
+  const requiereInternet = steam?.requiereInternet === true || igdb?.requiereInternet === true ? true : null;
+  const igdbRating = Number.isInteger(igdb?.igdbRating) ? igdb.igdbRating : null;
+  return { jugadores, requiereInternet, igdbRating, metaEnriquecida: true };
+}
+
+/** Steam (modos / internet) e IGDB (nota y modos de respaldo). Fallos silenciosos. */
+async function enriquecerMeta(ficha, headers = {}) {
+  if (!ficha) return ficha;
+  if (ficha.metaEnriquecida) return ficha;
+  const { igdbClientId, igdbClientSecret } = obtenerCredenciales(headers);
+  const appId = steamAppIdDe(ficha);
+  const hayIgdb = Boolean(igdbClientId && igdbClientSecret);
+  const [steam, igdb] = await Promise.all([
+    appId ? metaSteam(appId).catch(() => null) : Promise.resolve(null),
+    hayIgdb ? metaIgdb(ficha.titulo, igdbClientId, igdbClientSecret).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (!appId && !hayIgdb) return { ...ficha, metaEnriquecida: true };
+  const fallo = (appId && !steam) || (hayIgdb && !igdb);
+  const meta = unirMeta(steam, igdb);
+  return { ...ficha, ...meta, metaEnriquecida: !fallo };
+}
+
+function fichaDesdeCache(enBD, urlPortada) {
+  return {
+    id: enBD.externalId,
+    titulo: enBD.titulo,
+    slug: enBD.slug,
+    urlPortada,
+    portada: urlPortada,
+    descripcion: sanitizarSinopsis(enBD.descripcion || '', { exigirContextoLudico: false }),
+    plataformas: enBD.plataformas ? enBD.plataformas.split(', ') : [],
+    sistemas: enBD.sistemas ? enBD.sistemas.split(', ') : [],
+    generos: enBD.generos ? enBD.generos.split(', ').filter(Boolean) : [],
+    tematicas: enBD.tematicas ? enBD.tematicas.split(', ').filter(Boolean) : [],
+    metacritic: enBD.metacritic,
+    igdbRating: enBD.igdbRating ?? null,
+    jugadores: enBD.jugadores || null,
+    requiereInternet: enBD.requiereInternet === true ? true : null,
+    metaEnriquecida: Boolean(enBD.metaEnriquecida),
+    desarrollador: enBD.desarrollador,
+    anoLanzamiento: enBD.anoLanzamiento,
+    lanzamiento: enBD.anoLanzamiento ? `${enBD.anoLanzamiento}-01-01` : null,
+    enlacesTienda: JSON.parse(enBD.enlacesTienda || '{}'),
+    fuente: 'db',
+  };
 }
 
 // 3. DETALLE DE JUEGO
@@ -463,44 +539,66 @@ export async function detalleJuegoCatalogo(idFuente, headers = {}) {
           tiendas,
           urlActual: urlPortada || '',
         });
-        if (mejor && mejor !== urlPortada) {
+        if (mejor && esPortadaVerticalOptima(mejor) && mejor !== urlPortada) {
           urlPortada = mejor;
           prisma.juego.update({ where: { id: enBD.id }, data: { urlPortada: mejor } }).catch(() => {});
+        } else if (!esPortadaVerticalOptima(urlPortada)) {
+          urlPortada = null;
+          if (enBD.urlPortada) {
+            prisma.juego.update({ where: { id: enBD.id }, data: { urlPortada: null } }).catch(() => {});
+          }
         }
       } catch {
         // Fallback
       }
     }
 
-    if (enBD.descripcion && /\b(is an?|by the|the player|developed by|takes place in|set in|as a young|in which the|released in|action-adventure game)\b/i.test(enBD.descripcion)) {
+    // Si la descripción cacheada es de otro medio (banda, película…), invalidarla
+    const descActual = sanitizarSinopsis(enBD.descripcion || '', { exigirContextoLudico: false });
+    if (enBD.descripcion && !descActual) {
+      enBD.descripcion = '';
+      prisma.juego.update({ where: { id: enBD.id }, data: { descripcion: '' } }).catch(() => {});
+    } else if (descActual && descActual !== enBD.descripcion) {
+      enBD.descripcion = descActual;
+    }
+
+    // Traducción ES solo si no hay texto de tienda válido y Wikipedia confirma videojuego
+    if (!sanitizarSinopsis(enBD.descripcion || '', { exigirContextoLudico: false })) {
       try {
-        const descEs = await descripcionWikipediaEspanol(enBD.titulo);
-        if (descEs) {
-          enBD.descripcion = descEs;
-          prisma.juego.update({ where: { id: enBD.id }, data: { descripcion: descEs } }).catch(() => {});
+        const sinopsis = await resolverSinopsis({
+          titulo: enBD.titulo,
+          steamAppId: (() => {
+            try {
+              const t = JSON.parse(enBD.enlacesTienda || '{}');
+              return t.steam?.match(/\/app\/(\d+)/)?.[1] || null;
+            } catch {
+              return null;
+            }
+          })(),
+        });
+        if (sinopsis.texto) {
+          enBD.descripcion = sinopsis.texto;
+          prisma.juego.update({ where: { id: enBD.id }, data: { descripcion: sinopsis.texto } }).catch(() => {});
         }
       } catch {
-        // Fallback
+        // sin descripción
       }
     }
 
-    return {
-      id: enBD.externalId,
-      titulo: enBD.titulo,
-      slug: enBD.slug,
-      urlPortada,
-      portada: urlPortada,
-      descripcion: enBD.descripcion,
-      plataformas: enBD.plataformas ? enBD.plataformas.split(', ') : [],
-      sistemas: enBD.sistemas ? enBD.sistemas.split(', ') : [],
-      generos: enBD.generos ? enBD.generos.split(', ') : [],
-      metacritic: enBD.metacritic,
-      desarrollador: enBD.desarrollador,
-      anoLanzamiento: enBD.anoLanzamiento,
-      lanzamiento: enBD.anoLanzamiento ? `${enBD.anoLanzamiento}-01-01` : null,
-      enlacesTienda: JSON.parse(enBD.enlacesTienda || '{}'),
-      fuente: 'db',
-    };
+    const cacheada = fichaDesdeCache(enBD, urlPortada);
+    const enriquecida = await enriquecerMeta(cacheada, headers);
+    if (enriquecida.metaEnriquecida && !enBD.metaEnriquecida) {
+      prisma.juego.update({
+        where: { id: enBD.id },
+        data: {
+          igdbRating: enriquecida.igdbRating,
+          jugadores: enriquecida.jugadores,
+          requiereInternet: enriquecida.requiereInternet,
+          metaEnriquecida: true,
+        },
+      }).catch(() => {});
+    }
+    return enriquecida;
   }
 
   // Si es ID de RAWG (ej: rawg:1234)
@@ -530,36 +628,52 @@ export async function detalleJuegoCatalogo(idFuente, headers = {}) {
           else if (storeId === 5) enlacesTienda.gog = url;
         }
 
-        const [mejorPortada, descripcionEs] = await Promise.all([
+        const steamAppId = enlacesTienda.steam?.match(/\/app\/(\d+)/)?.[1] || null;
+        const rawgDesc = game.description_raw || game.description || '';
+
+        const [mejorPortada, sinopsis] = await Promise.all([
           resolverMejorPortada({
             titulo: game.name,
+            steamAppId,
             tiendas: enlacesTienda,
             urlActual: game.background_image || null,
           }),
-          descripcionWikipediaEspanol(game.name),
+          resolverSinopsis({
+            titulo: game.name,
+            steamAppId,
+            rawg: rawgDesc,
+          }),
+        ]);
+
+        const tax = prepararTaxonomiaParaPrisma([
+          ...(game.genres || []).map((g) => g.name),
+          ...(game.tags || []).map((t) => t.name).slice(0, 12),
         ]);
 
         const ficha = {
           id: idFuente,
           titulo: game.name,
           slug: game.slug,
-          urlPortada: mejorPortada || null,
-          portada: mejorPortada || null,
+          urlPortada: mejorPortada && esPortadaVerticalOptima(mejorPortada) ? mejorPortada : null,
+          portada: mejorPortada && esPortadaVerticalOptima(mejorPortada) ? mejorPortada : null,
           banner: game.background_image || null,
-          descripcion: descripcionEs || game.description_raw || game.description || '',
+          descripcion: sinopsis.texto || '',
           plataformas: (game.platforms || []).map((p) => p.platform?.name).filter(Boolean),
           sistemas: (game.parent_platforms || []).map((p) => p.platform?.name).filter(Boolean),
-          generos: (game.genres || []).map((g) => traducirGenero(g.name)).filter(Boolean),
+          generos: tax.generos,
+          tematicas: tax.tematicas,
           metacritic: game.metacritic || null,
           desarrollador: (game.developers || []).map((d) => d.name).join(', ') || '',
           anoLanzamiento: game.released ? new Date(game.released).getFullYear() : null,
           lanzamiento: game.released || null,
           enlacesTienda,
           fuente: 'rawg',
+          origenDescripcion: sinopsis.origen || '',
         };
 
-        await cachearJuegoEnBD(ficha);
-        return ficha;
+        const conMeta = await enriquecerMeta(ficha, headers);
+        await cachearJuegoEnBD(conMeta);
+        return conMeta;
       }
     } catch (e) {
       console.warn('Error al obtener detalle de RAWG:', e.message);
@@ -567,7 +681,17 @@ export async function detalleJuegoCatalogo(idFuente, headers = {}) {
   }
 
   // Fallback a detalle tradicional
-  return detalleFicha(idFuente);
+  const tradicional = await detalleFicha(idFuente);
+  if (!tradicional) return null;
+  const conMeta = await enriquecerMeta({
+    ...tradicional,
+    urlPortada: tradicional.urlPortada || tradicional.portada || null,
+    enlacesTienda: tradicional.enlacesTienda || (tradicional.steamAppId
+      ? { steam: `https://store.steampowered.com/app/${tradicional.steamAppId}` }
+      : {}),
+  }, headers);
+  cachearJuegoEnBD(conMeta).catch(() => {});
+  return conMeta;
 }
 
 // 4. OBTENER RECOMENDACIONES BASADAS EN GUSTOS

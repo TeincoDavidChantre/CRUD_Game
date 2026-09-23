@@ -4,9 +4,22 @@ import {
   obtenerRecomendacionesCatalogo,
   obtenerTendenciasCatalogo,
 } from '../lib/catalogo-provider.js';
+import { armarOfertasInicio } from '../lib/ofertas.js';
 import { armarSugerenciasInicio } from '../lib/sugerencias-inicio.js';
 import { buscarFichas } from '../lib/fuentes.js';
 import { prisma } from '../lib/prisma.js';
+import { crearTtlCache } from '../lib/ttlCache.js';
+
+const cacheSugerencias = crearTtlCache({ max: 100 });
+const TTL_SUGERENCIAS_MS = 20 * 60 * 1000; // 20 min por usuario
+
+function firmaBiblioteca(juegos) {
+  // Cambia si añade/quita/cambia estado — invalida caché de sugerencias
+  return juegos
+    .slice(0, 40)
+    .map((j) => `${j.id}:${j.estado}:${j.calificacion || 0}`)
+    .join('|');
+}
 
 export const obtenerSugerenciasInicio = async (req, res) => {
   try {
@@ -15,7 +28,13 @@ export const obtenerSugerenciasInicio = async (req, res) => {
       orderBy: { actualizadoEn: 'desc' },
     });
     const seed = String(req.query.seed || '');
+    const clave = `sug:${req.usuario.id}:${firmaBiblioteca(juegos)}`;
+    const cached = cacheSugerencias.get(clave);
+    if (cached) {
+      return res.json({ ...cached, cached: true });
+    }
     const data = await armarSugerenciasInicio(juegos, req.headers, seed);
+    cacheSugerencias.set(clave, data, TTL_SUGERENCIAS_MS);
     res.json(data);
   } catch (error) {
     console.error('Error en GET /api/catalogo/sugerencias:', error.message);
@@ -30,6 +49,19 @@ export const obtenerTendencias = async (req, res) => {
   } catch (error) {
     console.error('Error en GET /api/catalogo/tendencias:', error.message);
     res.status(500).json({ error: 'No se pudieron obtener las tendencias' });
+  }
+};
+
+export const obtenerOfertas = async (req, res) => {
+  try {
+    const limite = Number(req.query.limite) || 12;
+    const moneda = String(req.query.moneda || req.query.currency || 'USD').toUpperCase();
+    const data = await armarOfertasInicio({ limite, moneda });
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json(data);
+  } catch (error) {
+    console.error('Error en GET /api/catalogo/ofertas:', error.message);
+    res.status(500).json({ error: 'No se pudieron cargar las ofertas' });
   }
 };
 
