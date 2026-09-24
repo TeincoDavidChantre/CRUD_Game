@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { ChevronDown, Gamepad2, Menu, Settings, User, LogOut, X } from 'lucide-react';
+import { ChevronDown, Gamepad2, Menu, Settings, User, LogOut, X, Tag } from 'lucide-react';
 import API from '../services/api';
 import Avatar from './Avatar';
 
@@ -75,16 +75,17 @@ export default function Navbar() {
   const isActive = (path) => {
     if (path === '/') return location.pathname === '/';
     if (path.startsWith('/library')) return location.pathname.startsWith('/library');
+    if (path.startsWith('/offers')) return location.pathname.startsWith('/offers');
     if (path.startsWith('/perfil')) return location.pathname.startsWith('/perfil');
     return location.pathname.startsWith(path);
   };
 
   const getDesktopClass = (path) => {
-    return `transition hover:text-amber-300 ${isActive(path) ? 'text-amber-300' : 'text-zinc-100'}`;
+    return `transition hover:text-amber-300 ${isActive(path) ? 'text-amber-300 font-semibold' : 'text-zinc-100'}`;
   };
 
   const getMobileClass = (path) => {
-    return `block px-4 py-3 text-base transition ${isActive(path) ? 'bg-amber-400/10 text-amber-300 rounded-lg' : 'text-zinc-100 hover:text-amber-300'}`;
+    return `block px-4 py-3 text-base transition ${isActive(path) ? 'bg-amber-400/10 text-amber-300 rounded-lg font-semibold' : 'text-zinc-100 hover:text-amber-300'}`;
   };
 
   const menuItemClass = 'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-zinc-100 transition hover:bg-amber-400/10 hover:text-amber-300';
@@ -104,9 +105,9 @@ export default function Navbar() {
             <nav className="hidden sm:flex items-center gap-5 text-sm font-medium">
               {token ? (
                 <>
-                  <Link to="/" className={getDesktopClass('/')}>Inicio</Link>
-                  <Link to="/library" className={getDesktopClass('/library')}>Biblioteca</Link>
-                  <Link to="/amigos" className={getDesktopClass('/amigos')}>Amigos</Link>
+                        <Link to="/" className={getDesktopClass('/')}>Inicio</Link>
+                        <Link to="/offers" className={getDesktopClass('/offers')}>Ofertas</Link>
+                        <Link to="/amigos" className={getDesktopClass('/amigos')}>Amigos</Link>
                 </>
               ) : (
                 <>
@@ -296,9 +297,10 @@ export default function Navbar() {
                 </div>
               </div>
 
-              {/* Nav principal: se desplaza al expandir la cuenta */}
+              {/* Nav principal */}
               <Link to="/" className={getMobileClass('/')}>Inicio</Link>
               <Link to="/library" className={getMobileClass('/library')}>Biblioteca</Link>
+              <Link to="/offers" className={getMobileClass('/offers')}>Ofertas</Link>
               <Link to="/amigos" className={getMobileClass('/amigos')}>Amigos</Link>
             </>
           ) : (
